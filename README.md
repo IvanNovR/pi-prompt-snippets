@@ -69,11 +69,13 @@ The menu saves `persistent: true` or `false` in the snippet file when you press 
 
 Original idea and implementation: [amosblomqvist/pi-config](https://github.com/amosblomqvist/pi-config/tree/main/extensions/prompt-snippets). Package maintenance and enhancements: [IvanNovR](https://github.com/IvanNovR).
 
-[MIT](LICENSE). The local license retains the repository's verified `Copyright (c) 2026 Ivan` notice. No additional upstream copyright notice was present in the supplied source; upstream attribution is retained above.
-
 ## Development and releases
 
 Use Node 24.21.0 and npm 11.19.0: `npm ci`, then `npm test` and `npm run check:package`.
 All new commits, including bot commits and squash titles, must use [Conventional Commits](https://www.conventionalcommits.org/) (for example, `feat: add a snippet` or `fix: preserve selection`). Only the verified historical root `Initial commit` (`a90c48e`) is exempt.
 
 See the [maintainer release guide](docs/RELEASING.md) for the gated bootstrap, trusted publishing setup, and partial-publication recovery. Nothing publishes automatically in preparation mode.
+
+## License
+
+[MIT](LICENSE)
