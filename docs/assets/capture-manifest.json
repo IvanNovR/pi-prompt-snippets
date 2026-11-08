@@ -1,0 +1,30 @@
+{
+  "sourceSha256": "2572f06642db57c06f03cb7db3413b79b4472f4462edf93dd3e4e0bc85374a63",
+  "piVersion": "1.5.0",
+  "frames": [
+    {
+      "name": "01-menu",
+      "label": "Open /snippets"
+    },
+    {
+      "name": "02-temporary",
+      "label": "Space: temporary selection"
+    },
+    {
+      "name": "03-persistent",
+      "label": "Space again: persistent selection"
+    },
+    {
+      "name": "04-selection",
+      "label": "Combine prepend and append snippets"
+    },
+    {
+      "name": "05-preview",
+      "label": "Tab: preview the selected snippet"
+    },
+    {
+      "name": "06-widget",
+      "label": "Enter: active-snippet widget"
+    }
+  ]
+}

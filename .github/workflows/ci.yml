@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  commits:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Check every new commit and PR title
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: npm run check:commits
+
+  package:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - run: npm install --global npm@11.19.0
+      - run: npm ci
+      - run: npm test
+      - run: npm run check:package
