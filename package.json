@@ -25,7 +25,9 @@
   "type": "module",
   "main": "dist/index.js",
   "pi": {
-    "extensions": ["./index.ts"],
+    "extensions": [
+      "./index.ts"
+    ],
     "image": "https://raw.githubusercontent.com/IvanNovR/pi-prompt-snippets/main/docs/assets/menu.png"
   },
   "types": "dist/index.d.ts",
