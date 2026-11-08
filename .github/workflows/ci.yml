@@ -5,16 +5,69 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR to validate (required with expected_sha)'
+        type: string
+      expected_sha:
+        description: 'Exact PR head SHA; fails if the PR has moved'
+        type: string
 
 permissions:
   contents: read
 
 jobs:
+  source:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+      base: ${{ steps.source.outputs.base }}
+      title: ${{ steps.source.outputs.title }}
+    steps:
+      - name: Resolve and verify the exact source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number }}
+          EXPECTED_SHA: ${{ inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          PUSH_BASE: ${{ github.event.before }}
+          DISPATCH_SHA: ${{ inputs.expected_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if [[ -n "$PR_NUMBER" ]]; then
+            [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
+            pr=$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER")
+            jq -e --arg sha "$EXPECTED_SHA" '.state == "open" and .head.sha == $sha' <<< "$pr" > /dev/null
+            if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+              test "$WORKFLOW_SHA" = "$EXPECTED_SHA"
+              jq -e --arg repo "$REPOSITORY" '.head.repo.full_name == $repo and .base.ref == "main"' <<< "$pr" > /dev/null
+            fi
+            echo "base=$(jq -r '.base.sha' <<< "$pr")" >> "$GITHUB_OUTPUT"
+            # Encode potentially untrusted PR titles as one JSON line, not output syntax.
+            echo "title=$(jq -c '.title' <<< "$pr")" >> "$GITHUB_OUTPUT"
+          else
+            if [[ "$EVENT_NAME" == workflow_dispatch && -n "$DISPATCH_SHA" ]]; then
+              echo 'expected_sha requires pr_number'; exit 1
+            fi
+            echo "base=$PUSH_BASE" >> "$GITHUB_OUTPUT"
+          fi
+          echo "sha=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
+
   commits:
+    needs: source
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ needs.source.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -23,16 +76,18 @@ jobs:
           package-manager-cache: false
       - name: Check every new commit and PR title
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
+          BASE_SHA: ${{ needs.source.outputs.base }}
+          HEAD_SHA: ${{ needs.source.outputs.sha }}
+          PR_TITLE: ${{ needs.source.outputs.title && fromJSON(needs.source.outputs.title) || '' }}
         run: npm run check:commits
 
   package:
+    needs: source
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ needs.source.outputs.sha }}
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:

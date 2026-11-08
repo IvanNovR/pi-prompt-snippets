@@ -1,8 +1,9 @@
 name: Release
 
-# Preparation mode: no push/tag/release triggers. Each phase needs a deliberate
-# dispatch from main AND repository readiness variables; see docs/RELEASING.md.
+# Both automatic and manual runs remain gated by repository readiness variables.
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       operation:
@@ -22,7 +23,7 @@ concurrency:
 
 jobs:
   release:
-    if: ${{ github.ref == 'refs/heads/main' && vars.RELEASE_AUTOMATION_READY == 'true' && inputs.operation == 'release' }}
+    if: ${{ github.ref == 'refs/heads/main' && vars.RELEASE_AUTOMATION_READY == 'true' && (github.event_name == 'push' || inputs.operation == 'release') }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -31,12 +32,39 @@ jobs:
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
+      prs: ${{ steps.release.outputs.prs }}
     steps:
       - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
         id: release
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  release-pr-ci:
+    needs: release
+    if: ${{ needs.release.outputs.prs != '' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Dispatch read-only CI for each exact release PR head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PRS: ${{ needs.release.outputs.prs }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for number in $(jq -r '.[].number' <<< "$PRS"); do
+            [[ "$number" =~ ^[0-9]+$ ]]
+            pr=$(gh api "repos/$REPOSITORY/pulls/$number")
+            jq -e --arg repo "$REPOSITORY" '.state == "open" and .base.ref == "main" and .head.repo.full_name == $repo and .user.login == "github-actions[bot]"' <<< "$pr" > /dev/null
+            branch=$(jq -r '.head.ref' <<< "$pr")
+            sha=$(jq -r '.head.sha' <<< "$pr")
+            gh workflow run ci.yml --repo "$REPOSITORY" --ref "$branch" -f pr_number="$number" -f expected_sha="$sha"
+          done
 
   target:
     needs: release
