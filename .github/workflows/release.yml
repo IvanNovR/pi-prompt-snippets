@@ -94,6 +94,8 @@ jobs:
 
   publish:
     needs: target
+    # Retry deliberately skips release; override transitive skipped-job propagation.
+    if: ${{ always() && needs.target.result == 'success' }}
     runs-on: ubuntu-24.04
     environment: publication
     permissions:
