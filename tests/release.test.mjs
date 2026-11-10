@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 
 const script = pathToFileURL(resolve('scripts/publish-registry.mjs')).href;
-function probe({ status = 200, mismatch = false, network = false, publishFailure = false, registry = 'https://registry.npmjs.org' } = {}) {
+function probe({ status = 200, mismatch = false, network = false, publishFailure = false, registry = 'https://registry.npmjs.org', versionAbsent = false } = {}) {
   return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', `
     import cp from 'node:child_process';
     import { syncBuiltinESMExports } from 'node:module';
@@ -25,7 +25,14 @@ function probe({ status = 200, mismatch = false, network = false, publishFailure
     syncBuiltinESMExports();
     globalThis.fetch = async () => {
       if (${network}) throw new Error('network failure');
-      return { status: ${status}, json: async () => ({ name: pkg.name, version: pkg.version, dist: { shasum: ${mismatch} ? 'different' : createHash('sha1').update('fixture tarball').digest('hex') } }) };
+      const isGitHub = ${JSON.stringify(registry)} === 'https://npm.pkg.github.com';
+      const shasum = createHash('sha1').update('fixture tarball').digest('hex');
+      if (isGitHub) {
+        const versions = ${versionAbsent} ? {} : { [pkg.version]: { name: pkg.name, version: pkg.version, dist: { shasum: ${mismatch} ? 'different' : shasum } } };
+        return { status: ${status}, json: async () => ({ name: pkg.name, versions }) };
+      } else {
+        return { status: ${status}, json: async () => ({ name: pkg.name, version: pkg.version, dist: { shasum: ${mismatch} ? 'different' : shasum } }) };
+      }
     };
     process.argv = ['node', 'script', ${JSON.stringify(registry)}, tarball];
     process.env.NODE_AUTH_TOKEN = 'test-only';
@@ -65,3 +72,26 @@ test('a concealed 404 or a failed publication cannot produce false success', () 
   assert.equal(result.calls.length, 1);
   assert.equal(result.error, 'publish authorization failure');
 });
+test('GitHub Packages aggregate 200 with identical sha skips publication', () => {
+  const result = probe({ registry: 'https://npm.pkg.github.com' });
+  assert.equal(result.calls.length, 0);
+  assert.equal(result.error, undefined);
+});
+test('GitHub Packages aggregate 200 with version absent attempts publication', () => {
+  const result = probe({ registry: 'https://npm.pkg.github.com', versionAbsent: true });
+  assert.equal(result.error, undefined);
+  assert.equal(result.calls.length, 1);
+  assert.equal(result.calls[0][0], 'npm');
+});
+test('GitHub Packages aggregate 200 with mismatched sha is fatal', () => {
+  const result = probe({ registry: 'https://npm.pkg.github.com', mismatch: true });
+  assert.equal(result.calls.length, 0);
+  assert.match(result.error, /different bytes/);
+});
+for (const status of [403, 429, 500]) {
+  test(`GitHub Packages aggregate ${status} is fatal with no publish calls`, () => {
+    const result = probe({ status, registry: 'https://npm.pkg.github.com' });
+    assert.equal(result.calls.length, 0);
+    assert.match(result.error, new RegExp(`HTTP ${status}`));
+  });
+}
