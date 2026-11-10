@@ -1,6 +1,6 @@
 {
   "name": "@ivannovr/pi-prompt-snippets",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Pi extension for reusable prompt snippets. Fork of amosblomqvist/pi-config",
   "author": "IvanNovR",
   "repository": {
