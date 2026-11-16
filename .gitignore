@@ -3,3 +3,13 @@ dist/
 *.log
 *.tgz
 *.backup
+
+# Pi agent settings
+.pi/
+
+# IDE settings
+.idea/
+.vscode/
+
+# macOS
+.DS_Store

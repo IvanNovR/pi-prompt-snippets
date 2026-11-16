@@ -1,7 +1,7 @@
 {
   "name": "@ivannovr/pi-prompt-snippets",
   "version": "1.0.1",
-  "description": "Pi extension for reusable prompt snippets. Fork of amosblomqvist/pi-config",
+  "description": "Pi extension for managing reusable prompt snippets with preview and persistence",
   "author": "IvanNovR",
   "repository": {
     "type": "git",
@@ -32,6 +32,8 @@
   },
   "types": "dist/index.d.ts",
   "files": [
+    "README.md",
+    "LICENSE",
     "index.ts",
     "dist",
     "snippets",

@@ -1,5 +1,9 @@
 # Pi Prompt Snippets
 
+[![npm version](https://img.shields.io/npm/v/@ivannovr/pi-prompt-snippets.svg?style=flat-square)](https://www.npmjs.com/package/@ivannovr/pi-prompt-snippets)
+[![npm downloads](https://img.shields.io/npm/dm/@ivannovr/pi-prompt-snippets.svg?style=flat-square)](https://www.npmjs.com/package/@ivannovr/pi-prompt-snippets)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
+
 Reusable prompt rules for [Pi](https://github.com/earendil-works/pi): select snippets, preview their text, and prepend or append them to your next message.
 
 ![Selecting snippets, previewing their text, and applying the active-snippet widget](docs/assets/demo.gif)
