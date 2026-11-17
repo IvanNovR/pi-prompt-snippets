@@ -1,30 +1,565 @@
 {
-  "sourceSha256": "2572f06642db57c06f03cb7db3413b79b4472f4462edf93dd3e4e0bc85374a63",
+  "mechanism": "Actual Pi CLI PTY; tmux VT emulation; ANSI styled cell export; Pillow rasterization; ffmpeg GIF encoding. Not desktop pixels.",
+  "sourceSha256": "c71454e8ee9a37ee97653aca1d14b06ded0656018431fbe5108b98eb69b06527",
   "piVersion": "1.5.0",
+  "grid": {
+    "columns": 110,
+    "rows": 30,
+    "cellPixels": [
+      10,
+      20
+    ]
+  },
+  "input": "Help me review this project.",
+  "snippets": [
+    "session-kickoff.md",
+    "orchestrator-mode.md",
+    "ask-questions.md"
+  ],
+  "selection": "All temporary; two prepend, one append",
+  "provider": "capture-offline/GPT-Ivan: fixture name, empty completion; no network, model output, or real model cost",
+  "theme": {
+    "name": "system",
+    "selection": "Clean unset Pi theme; no terminal OSC color replies; native ANSI fallback",
+    "terminalForeground": "#e5e5e5",
+    "terminalBackground": "#000000",
+    "terminalPalette": "xterm 16-color defaults in raster(); SGR2 half-intensity foreground composited against background"
+  },
+  "nativeAdaptations": {
+    "header": "Actual built-in Pi header preserved; one muted npm attribution line appended to native header container",
+    "cwd": "Native footer first-line display-only replacement ~/Projects/IdeaProjects/pi-prompt-snippets -> ~/Projects/pi-prompt-snippets; actual cwd unchanged"
+  },
+  "versions": {
+    "tmux": "tmux 3.8",
+    "pillow": "13.0.0",
+    "node": "v24.21.0",
+    "toolsFromChildPath": {
+      "fd": "fd 10.5.0",
+      "rg": "ripgrep 15.2.0 (rev e89fff89ac)"
+    },
+    "ffmpeg": "ffmpeg version 9.0.2 Copyright (c) 2000-2026 the FFmpeg developers"
+  },
+  "executableDiscovery": "Existing ~/.pi/agent/bin prepended to child PATH; no cache relocation",
+  "verification": [
+    {
+      "requestSha256": "cd23381907171038cd157754e04673af5964dc192a284aa41453859eae410584",
+      "visibility": "visible",
+      "verifiedFullPrompt": true,
+      "verifiedEmptyCompletion": true,
+      "verifiedSelectedTemporaryIDs": [
+        "session-kickoff.md",
+        "orchestrator-mode.md",
+        "ask-questions.md"
+      ],
+      "verifiedSendClipsNoMenuOrPreview": true,
+      "verifiedNativeFooterAtBottom": true
+    },
+    {
+      "requestSha256": "cd23381907171038cd157754e04673af5964dc192a284aa41453859eae410584",
+      "visibility": "hidden",
+      "verifiedFullPrompt": true,
+      "verifiedEmptyCompletion": true,
+      "verifiedSelectedTemporaryIDs": [
+        "session-kickoff.md",
+        "orchestrator-mode.md",
+        "ask-questions.md"
+      ],
+      "verifiedSendClipsNoMenuOrPreview": true,
+      "verifiedNativeFooterAtBottom": true
+    }
+  ],
   "frames": [
     {
+      "mode": "visible",
+      "name": "00-startup",
+      "seconds": 2
+    },
+    {
+      "mode": "visible",
       "name": "01-menu",
-      "label": "Open /snippets"
+      "seconds": 1.4
     },
     {
-      "name": "02-temporary",
-      "label": "Space: temporary selection"
+      "mode": "visible",
+      "name": "02-prepend-one",
+      "seconds": 0.8
     },
     {
-      "name": "03-persistent",
-      "label": "Space again: persistent selection"
+      "mode": "visible",
+      "name": "03-prepend-two",
+      "seconds": 0.8
     },
     {
+      "mode": "visible",
       "name": "04-selection",
-      "label": "Combine prepend and append snippets"
+      "seconds": 2
     },
     {
+      "mode": "visible",
       "name": "05-preview",
-      "label": "Tab: preview the selected snippet"
+      "seconds": 2
     },
     {
-      "name": "06-widget",
-      "label": "Enter: active-snippet widget"
+      "mode": "visible",
+      "name": "07-widget",
+      "seconds": 1.4
+    },
+    {
+      "mode": "visible",
+      "name": "08-input",
+      "seconds": 1.8
+    },
+    {
+      "mode": "visible",
+      "name": "09-sent",
+      "seconds": 4
+    },
+    {
+      "mode": "hidden",
+      "name": "00-startup",
+      "seconds": 2
+    },
+    {
+      "mode": "hidden",
+      "name": "01-menu",
+      "seconds": 1.4
+    },
+    {
+      "mode": "hidden",
+      "name": "02-prepend-one",
+      "seconds": 0.8
+    },
+    {
+      "mode": "hidden",
+      "name": "03-prepend-two",
+      "seconds": 0.8
+    },
+    {
+      "mode": "hidden",
+      "name": "04-selection",
+      "seconds": 2
+    },
+    {
+      "mode": "hidden",
+      "name": "05-preview",
+      "seconds": 2
+    },
+    {
+      "mode": "hidden",
+      "name": "06-hidden-setting",
+      "seconds": 1.4
+    },
+    {
+      "mode": "hidden",
+      "name": "07-widget",
+      "seconds": 1.4
+    },
+    {
+      "mode": "hidden",
+      "name": "08-input",
+      "seconds": 1.8
+    },
+    {
+      "mode": "hidden",
+      "name": "09-sent",
+      "seconds": 4
     }
-  ]
+  ],
+  "resolvedNativeTheme": {
+    "name": "system",
+    "appearance": "dark",
+    "colors": {
+      "accent": {
+        "kind": "indexed",
+        "index": 5
+      },
+      "borderAccent": {
+        "kind": "indexed",
+        "index": 5
+      },
+      "customMessageLabel": {
+        "kind": "indexed",
+        "index": 5
+      },
+      "mdCode": {
+        "kind": "indexed",
+        "index": 5
+      },
+      "mdListBullet": {
+        "kind": "indexed",
+        "index": 5
+      },
+      "syntaxType": {
+        "kind": "indexed",
+        "index": 5
+      },
+      "border": {
+        "kind": "indexed",
+        "index": 4
+      },
+      "mdLink": {
+        "kind": "indexed",
+        "index": 4
+      },
+      "syntaxKeyword": {
+        "kind": "indexed",
+        "index": 4
+      },
+      "syntaxVariable": {
+        "kind": "indexed",
+        "index": 6
+      },
+      "success": {
+        "kind": "indexed",
+        "index": 2
+      },
+      "mdCodeBlock": {
+        "kind": "indexed",
+        "index": 2
+      },
+      "toolDiffAdded": {
+        "kind": "indexed",
+        "index": 2
+      },
+      "bashMode": {
+        "kind": "indexed",
+        "index": 2
+      },
+      "syntaxNumber": {
+        "kind": "indexed",
+        "index": 5
+      },
+      "error": {
+        "kind": "indexed",
+        "index": 1
+      },
+      "toolDiffRemoved": {
+        "kind": "indexed",
+        "index": 1
+      },
+      "warning": {
+        "kind": "indexed",
+        "index": 3
+      },
+      "mdHeading": {
+        "kind": "indexed",
+        "index": 3
+      },
+      "syntaxFunction": {
+        "kind": "indexed",
+        "index": 3
+      },
+      "syntaxString": {
+        "kind": "indexed",
+        "index": 2
+      },
+      "thinkingMinimal": {
+        "kind": "indexed",
+        "index": 4
+      },
+      "thinkingLow": {
+        "kind": "indexed",
+        "index": 4
+      },
+      "thinkingMedium": {
+        "kind": "indexed",
+        "index": 6
+      },
+      "thinkingHigh": {
+        "kind": "indexed",
+        "index": 5
+      },
+      "thinkingXhigh": {
+        "kind": "indexed",
+        "index": 13
+      },
+      "thinkingMax": {
+        "kind": "indexed",
+        "index": 1
+      },
+      "text": {
+        "kind": "rgb",
+        "r": 229,
+        "g": 229,
+        "b": 231
+      },
+      "userMessageText": {
+        "kind": "rgb",
+        "r": 229,
+        "g": 229,
+        "b": 231
+      },
+      "customMessageText": {
+        "kind": "oklch",
+        "l": 0.5534858560554942,
+        "c": 0.0016107785828912704,
+        "h": 286.3468756701785
+      },
+      "toolTitle": {
+        "kind": "rgb",
+        "r": 229,
+        "g": 229,
+        "b": 231
+      },
+      "syntaxOperator": {
+        "kind": "oklch",
+        "l": 0.5534858560554942,
+        "c": 0.0016107785828912704,
+        "h": 286.3468756701785
+      },
+      "syntaxPunctuation": {
+        "kind": "oklch",
+        "l": 0.5534858560554942,
+        "c": 0.0016107785828912704,
+        "h": 286.3468756701785
+      },
+      "muted": {
+        "kind": "oklch",
+        "l": 0.5534858560554942,
+        "c": 0.0016107785828912704,
+        "h": 286.3468756701785
+      },
+      "dim": {
+        "kind": "oklch",
+        "l": 0.5534858560554942,
+        "c": 0.0016107785828912704,
+        "h": 286.3468756701785
+      },
+      "thinkingText": {
+        "kind": "oklch",
+        "l": 0.5534858560554942,
+        "c": 0.0016107785828912704,
+        "h": 286.3468756701785
+      },
+      "toolOutput": {
+        "kind": "oklch",
+        "l": 0.5534858560554942,
+        "c": 0.0016107785828912704,
+        "h": 286.3468756701785
+      },
+      "mdLinkUrl": {
+        "kind": "oklch",
+        "l": 0.5534858560554942,
+        "c": 0.0016107785828912704,
+        "h": 286.3468756701785
+      },
+      "mdQuote": {
+        "kind": "oklch",
+        "l": 0.5534858560554942,
+        "c": 0.0016107785828912704,
+        "h": 286.3468756701785
+      },
+      "mdQuoteBorder": {
+        "kind": "oklch",
+        "l": 0.5534858560554942,
+        "c": 0.0016107785828912704,
+        "h": 286.3468756701785
+      },
+      "mdHr": {
+        "kind": "oklch",
+        "l": 0.5534858560554942,
+        "c": 0.0016107785828912704,
+        "h": 286.3468756701785
+      },
+      "mdCodeBlockBorder": {
+        "kind": "oklch",
+        "l": 0.5534858560554942,
+        "c": 0.0016107785828912704,
+        "h": 286.3468756701785
+      },
+      "toolDiffContext": {
+        "kind": "oklch",
+        "l": 0.5534858560554942,
+        "c": 0.0016107785828912704,
+        "h": 286.3468756701785
+      },
+      "syntaxComment": {
+        "kind": "oklch",
+        "l": 0.5534858560554942,
+        "c": 0.0016107785828912704,
+        "h": 286.3468756701785
+      },
+      "scrollbarTrack": {
+        "kind": "oklch",
+        "l": 0.5534858560554942,
+        "c": 0.0016107785828912704,
+        "h": 286.3468756701785
+      },
+      "scrollbarThumb": {
+        "kind": "oklch",
+        "l": 0.5534858560554942,
+        "c": 0.0016107785828912704,
+        "h": 286.3468756701785
+      },
+      "searchMatchText": {
+        "kind": "oklch",
+        "l": 0.5534858560554942,
+        "c": 0.0016107785828912704,
+        "h": 286.3468756701785
+      },
+      "borderMuted": {
+        "kind": "oklch",
+        "l": 0.5534858560554942,
+        "c": 0.0016107785828912704,
+        "h": 286.3468756701785
+      },
+      "thinkingOff": {
+        "kind": "oklch",
+        "l": 0.5534858560554942,
+        "c": 0.0016107785828912704,
+        "h": 286.3468756701785
+      },
+      "selectedBg": {
+        "kind": "rgb",
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "searchMatchBg": {
+        "kind": "rgb",
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "userMessageBg": {
+        "kind": "rgb",
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "customMessageBg": {
+        "kind": "rgb",
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "toolPendingBg": {
+        "kind": "rgb",
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "toolSuccessBg": {
+        "kind": "rgb",
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "toolErrorBg": {
+        "kind": "rgb",
+        "r": 0,
+        "g": 0,
+        "b": 0
+      }
+    }
+  },
+  "media": {
+    "demo.gif": {
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "width": 1100,
+            "height": 600,
+            "duration": "16.240000",
+            "nb_read_frames": "10"
+          }
+        ],
+        "format": {
+          "duration": "16.240000",
+          "size": "119892"
+        }
+      },
+      "delaysMilliseconds": [
+        2000,
+        1400,
+        800,
+        800,
+        2000,
+        2000,
+        1400,
+        1800,
+        4000,
+        40
+      ],
+      "sha256": "2c71546fe2e4a32c74f252bb7cade77ee51d75781216fc001be804c0c5999424"
+    },
+    "menu.gif": {
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "width": 1100,
+            "height": 600,
+            "duration": "5.040000",
+            "nb_read_frames": "5"
+          }
+        ],
+        "format": {
+          "duration": "5.040000",
+          "size": "39704"
+        }
+      },
+      "delaysMilliseconds": [
+        1400,
+        800,
+        800,
+        2000,
+        40
+      ],
+      "sha256": "c6e6f61de56f2a75b28027cf0bc0df7c7a4482f4b5896adaef9ff7113c698f7f"
+    },
+    "visible.gif": {
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "width": 1100,
+            "height": 600,
+            "duration": "7.240000",
+            "nb_read_frames": "4"
+          }
+        ],
+        "format": {
+          "duration": "7.240000",
+          "size": "44711"
+        }
+      },
+      "delaysMilliseconds": [
+        1400,
+        1800,
+        4000,
+        40
+      ],
+      "sha256": "049ced4a9f88b717ac06c2da6b16e013c3ec2e430d4c4fcfc15268d18756cc08"
+    },
+    "hidden.gif": {
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "width": 1100,
+            "height": 600,
+            "duration": "7.240000",
+            "nb_read_frames": "4"
+          }
+        ],
+        "format": {
+          "duration": "7.240000",
+          "size": "25086"
+        }
+      },
+      "delaysMilliseconds": [
+        1400,
+        1800,
+        4000,
+        40
+      ],
+      "sha256": "4d3b3e9f92f1b53cb1b29b72480ddf8afe8962cd20b4e2d86399b4c4b3d8f888"
+    }
+  }
 }
