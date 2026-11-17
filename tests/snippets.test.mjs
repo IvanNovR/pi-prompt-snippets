@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { stripVTControlCharacters } from 'node:util';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, cpSync, symlinkSync, rmSync, existsSync } from 'node:fs';
 import os, { tmpdir } from 'node:os';
 import { syncBuiltinESMExports } from 'node:module';
@@ -51,6 +52,7 @@ async function fixture(t, { compiled = false, mode = 'tui', entries = [], reason
   const extension = (await jiti.import(modulePath)).default;
   const handlers = new Map();
   let menuKeys = [];
+  let widget;
   // Initialize a theme compatible with pi-coding-agent's theme system
   const theme = {
     fg: (color, text) => text,
@@ -75,14 +77,14 @@ async function fixture(t, { compiled = false, mode = 'tui', entries = [], reason
     mode, hasUI: mode === 'tui',
     sessionManager: { getEntries: () => entries, getBranch: () => { throw new Error('must inspect all entries'); } },
     ui: {
-      theme, setWidget() {}, notify() {},
+      theme, setWidget(_id, lines) { widget = lines; }, notify() {},
       async custom(factory) {
         let result;
         let closed = false;
         const component = factory({ terminal: { rows: 40 }, requestRender() {} }, theme, {}, (value) => { closed = true; result = value; });
         for (const key of menuKeys) {
           if (typeof key === 'function') {
-            key(component.render(80));
+            await key(component.render(80));
             for (const width of [1, 10, 35]) {
               assert.ok(component.render(width).every((line) => visibleWidth(line) <= width));
             }
@@ -99,6 +101,7 @@ async function fixture(t, { compiled = false, mode = 'tui', entries = [], reason
   await emit('session_start', { reason });
   return {
     dir, snippetsDir, configPath, entries, emit, extension,
+    get widget() { return widget; },
     menuUI(keys) { menuKeys = keys; return ctx.ui; },
     input: async (text = 'hello', source = 'interactive', images) => await emit('input', { text, source, images }),
     async record(message) {
@@ -137,6 +140,85 @@ for (const compiled of [false, true]) {
     const f = await fixture(t, { compiled, defaults: true });
     assert.ok(existsSync(join(f.snippetsDir, 'session-kickoff.md')));
   });
+}
+
+for (const compiled of [false, true]) {
+  for (const visibility of ['visible', 'hidden']) {
+    const label = `${compiled ? 'compiled' : 'source'} ${visibility}`;
+    const persistentRow = (rows) => assert.match(stripVTControlCharacters(rows.join('\n')), /a\.md\s+persistent/);
+    const persistentPreview = (rows) => assert.ok(rows.join('\n').includes('a.md (persistent)'));
+    const inspectPersistent = [persistentRow, '\t', persistentPreview, '\t'];
+    const saved = (f) => ['a.md', 'b.md', 'c.md'].map((id) => readFileSync(join(f.snippetsDir, id), 'utf8'));
+    const send = async (f, text) => {
+      const input = await f.input(text);
+      const recorded = await f.record(user(input?.text ?? text));
+      return recorded?.message.content ?? input?.text ?? text;
+    };
+
+    test(`${label}: consumed persistent configuration stays visible without pending application`, async (t) => {
+      const f = await fixture(t, { compiled, visibility });
+      const bytes = saved(f);
+      await f.menu([...inspectPersistent, '\u001b']);
+      assert.equal(await send(f, 'first'), 'PRE\n\nfirst\n\nPOST');
+      assert.equal(f.widget, undefined);
+      for (let i = 0; i < 3; i++) {
+        await f.menu([...inspectPersistent, '\u001b']);
+        await f.menu(['\u001b[A', '\r', '\u001b']); // Visibility only
+        assert.equal(f.widget, undefined);
+      }
+      assert.deepEqual(saved(f), bytes, 'sending and no-op/Visibility-only menus preserve file bytes');
+      assert.equal(await send(f, 'next'), 'next');
+      for (const reason of ['resume', 'reload', 'fork']) {
+        await f.emit('session_start', { reason });
+        await f.menu([...inspectPersistent, '\u001b']);
+        assert.equal(f.widget, undefined);
+        assert.equal(await send(f, reason), reason);
+      }
+      f.entries.length = 0;
+      await f.emit('session_start', { reason: 'new' });
+      assert.ok(f.widget);
+      assert.equal(await send(f, 'new first'), 'PRE\n\nnew first\n\nPOST');
+      assert.equal(f.widget, undefined);
+      assert.equal(await send(f, 'new next'), 'new next');
+      assert.deepEqual(saved(f), bytes);
+    });
+
+    for (const target of ['off', 'temporary']) {
+      test(`${label}: explicit consumed persistent -> ${target} changes configuration and runtime`, async (t) => {
+        const f = await fixture(t, { compiled, visibility });
+        await send(f, 'first');
+        await f.menu([...inspectPersistent, ' ', ...(target === 'temporary' ? [' '] : []), '\u001b']);
+        assert.match(saved(f)[0], /persistent: false/);
+        assert.equal(!!f.widget, target === 'temporary');
+        assert.equal(await send(f, 'manual'), target === 'temporary' ? 'PRE\n\nmanual' : 'manual');
+        assert.equal(f.widget, undefined);
+        await f.menu([(rows) => assert.match(stripVTControlCharacters(rows.join('\n')), /a\.md\s+off/), '\t', (rows) => {
+          assert.ok(!rows.join('\n').includes('a.md (persistent)'));
+          assert.ok(!rows.join('\n').includes('a.md (temporary)'));
+        }, '\t', '\u001b']);
+        assert.equal(await send(f, 'later'), 'later');
+        f.entries.length = 0;
+        await f.emit('session_start', { reason: 'new' });
+        assert.equal(await send(f, 'new'), 'new\n\nPOST');
+        assert.equal(await send(f, 'new next'), 'new next');
+      });
+    }
+
+    test(`${label}: consume while menu open never restores untouched persistent or temporary selections`, async (t) => {
+      const f = await fixture(t, { compiled, visibility });
+      // Add nonpersistent temporary c alongside automatic persistent defaults.
+      await f.menu(['\u001b[B', '\u001b[B', ' ', '\u001b']);
+      const bytes = saved(f);
+      await f.menu([...inspectPersistent, async () => {
+        assert.equal(await send(f, 'during'), 'PRE\n\nduring\n\nPOST\n\nMANUAL');
+        assert.equal(f.widget, undefined);
+      }, '\u001b[A', '\r', '\u001b']);
+      assert.equal(f.widget, undefined);
+      assert.deepEqual(saved(f), bytes);
+      await f.menu([...inspectPersistent, '\u001b[B', '\u001b[B', (rows) => assert.match(stripVTControlCharacters(rows.join('\n')), /c\.md\s+off/), '\u001b']);
+      assert.equal(await send(f, 'after'), 'after');
+    });
+  }
 }
 
 for (const reason of ['startup', 'new', 'resume', 'reload', 'fork']) {
@@ -253,7 +335,7 @@ test('rejected Visible→Hidden attempt may omit snippets but recording and sess
   assert.equal((await f.input('rejected')).text, 'PRE\n\nrejected\n\nPOST');
   await f.menu(['\u001b[A', '\r', '\u001b']);
   assert.equal(await f.record(user('accepted Hidden')), undefined, 'conservative omission is allowed after rejected Visible input');
-  await f.menu([' ', '\u001b']);
+  await f.menu([' ', ' ', '\u001b']); // persistent -> off -> temporary
   assert.equal((await f.record(user('fresh Hidden'))).message.content, 'PRE\n\nfresh Hidden');
 
   // A new empty session must not inherit even unrecorded Visible provenance.
@@ -279,7 +361,7 @@ test('repeated Visibility-only changes neither reapply nor rearm consumed automa
 
 test('menu close does not restore selections consumed while open', async (t) => {
   const f = await fixture(t, { entries: [entry(user('old'))] });
-  await f.menu([' ', '\u001b']);
+  await f.menu([' ', ' ', '\u001b']); // saved persistent -> off -> temporary
   let attempt;
   await f.menu([() => { attempt = f.input('during menu'); }, '\u001b']);
   assert.equal((await attempt).text, 'PRE\n\nduring menu');
@@ -304,7 +386,7 @@ test('Esc saves changes rather than cancelling', async (t) => {
 
 test('manual selection remains available in used sessions', async (t) => {
   const f = await fixture(t, { entries: [entry(user('old'))] });
-  await f.menu([' ', '\u001b']);
+  await f.menu([' ', ' ', '\u001b']);
   assert.equal((await f.input()).text, 'PRE\n\nhello');
   assert.equal(await f.record(user('manual')), undefined);
 });
@@ -324,10 +406,13 @@ for (const compiled of [false, true]) {
   });
   test(`${label}: Enter and Space cycle off/temporary/persistent and Esc saves`, async (t) => {
     const f = await fixture(t, { compiled, entries: [entry(user('old'))] });
-    await f.menu(['\r', '\r', '\u0013', '\u001b']);
+    await f.menu(['\r', '\r', '\r', '\u001b']); // A full cycle leaves intent unchanged, so must not rearm.
+    assert.equal(await f.input('unchanged'), undefined);
+    await f.menu(['\r', '\u001b']); // persistent -> off
+    await f.menu(['\r', '\r', '\u0013', '\u001b']); // off -> temporary -> persistent
     assert.match(readFileSync(join(f.snippetsDir, 'a.md'), 'utf8'), /persistent: true/);
     assert.equal((await f.input('manual')).text, 'PRE\n\nmanual');
-    await f.menu([' ', '\u001b']); // used persistent snippet starts off -> temporary
+    await f.menu([' ', ' ', '\u001b']); // consumed persistent stays persistent -> off -> temporary
     assert.match(readFileSync(join(f.snippetsDir, 'a.md'), 'utf8'), /persistent: false/);
     assert.equal((await f.input('again')).text, 'PRE\n\nagain');
   });
@@ -336,7 +421,7 @@ for (const compiled of [false, true]) {
 for (const visibility of ['visible', 'hidden']) {
   test(`${visibility}: manual selection in used session is one-shot and preserves images`, async (t) => {
     const f = await fixture(t, { entries: [entry(user('old'))], visibility });
-    await f.menu([' ', '\u001b']);
+    await f.menu([' ', ' ', '\u001b']); // persistent -> off -> temporary
     const image = { type: 'image', data: 'abc', mimeType: 'image/png' };
     const result = await f.input('hello', 'interactive', [image]);
     if (visibility === 'visible') {
@@ -376,7 +461,7 @@ test('missing, malformed and invalid global Visibility default to Visible', asyn
 
 test('Hidden manual selection survives rejected inputs until a user message records', async (t) => {
   const f = await fixture(t, { entries: [entry(user('old'))], visibility: 'hidden' });
-  await f.menu([' ', '\u001b']);
+  await f.menu([' ', ' ', '\u001b']);
   assert.equal(await f.input('rejected'), undefined);
   assert.equal(await f.input('accepted'), undefined);
   assert.equal((await f.record(user('accepted'))).message.content, 'PRE\n\naccepted');
@@ -385,7 +470,7 @@ test('Hidden manual selection survives rejected inputs until a user message reco
 
 test('Visible manual selection is consumed by a rejected input transform, not retried', async (t) => {
   const f = await fixture(t, { entries: [entry(user('old'))], visibility: 'visible' });
-  await f.menu([' ', '\u001b']);
+  await f.menu([' ', ' ', '\u001b']);
   assert.equal((await f.input('rejected')).text, 'PRE\n\nrejected');
   // A later handler handles this attempt, or preflight rejects it: no recording.
   assert.equal(await f.input('accepted'), undefined);
@@ -401,7 +486,7 @@ for (const visibility of ['visible', 'hidden']) {
       const running = runtime.session.prompt('busy');
       await hold.started;
       try {
-        await runtime.menu([' ', '\u001b']); // Manual prepend for the next send/record.
+        await runtime.menu([' ', ' ', '\u001b']); // persistent -> off -> temporary for the next send/record.
         await runtime.session.followUp('queued A');
         await runtime.menu(['\u001b[A', '\r', '\u001b']); // Visibility only.
       } finally {

@@ -248,7 +248,9 @@ export default function (pi: ExtensionAPI) {
 		// Working copy; changed snippet states are applied on close (Esc).
 		const working = new Map<string, SnippetState>();
 		for (const snippet of snippets) {
-			const isEnabled = manualEnabled.has(snippet.id) || (automaticEligible && automaticEnabled.has(snippet.id));
+			// Saved persistent configuration remains selected after its session
+			// application is consumed; runtime sets alone drive injection/widget.
+			const isEnabled = !!snippet.persistent || manualEnabled.has(snippet.id) || (automaticEligible && automaticEnabled.has(snippet.id));
 			working.set(snippet.id, {
 				enabled: isEnabled,
 				persistent: snippet.persistent ?? false,
