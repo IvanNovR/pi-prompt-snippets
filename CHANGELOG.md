@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.1.0](https://github.com/IvanNovR/pi-prompt-snippets/compare/v1.0.1...v1.1.0) (2026-11-17)
+
+### Features
+
+* Add a sectioned snippet menu built on `@aliou/pi-utils-settings`: Enter/Space cycles settings, Esc saves and applies, and Tab previews snippets. ([d493dc2](https://github.com/IvanNovR/pi-prompt-snippets/commit/d493dc232347859ad0f164772e21b494cdaad3d2))
+* Unify automatic and manual snippet injection under a persisted global Visible (default) or Hidden setting. ([d493dc2](https://github.com/IvanNovR/pi-prompt-snippets/commit/d493dc232347859ad0f164772e21b494cdaad3d2))
+
+### Bug Fixes
+
+* Keep persistent configuration selected in the menu after application without rearming consumed snippets; preserve eligibility and runtime state when saving unchanged settings. ([80d9cfb](https://github.com/IvanNovR/pi-prompt-snippets/commit/80d9cfb9955702fe876288b274b46e3c6ca036da))
+* Guard conservatively against duplicate injection when visibility changes while an input is in flight. ([d493dc2](https://github.com/IvanNovR/pi-prompt-snippets/commit/d493dc232347859ad0f164772e21b494cdaad3d2))
+* Make package smoke tests independent of npm cache state by preparing runtime dependencies before checking offline tarball installation without host peers. ([a990032](https://github.com/IvanNovR/pi-prompt-snippets/commit/a99003261081d25831bf26ce6e02115ef809980f))
+
+### Tests
+
+* Expand the suite to 88 tests, including source and compiled real `AgentSession` regressions for queued inputs, rejected inputs, images, and persistence. ([d493dc2](https://github.com/IvanNovR/pi-prompt-snippets/commit/d493dc232347859ad0f164772e21b494cdaad3d2), [80d9cfb](https://github.com/IvanNovR/pi-prompt-snippets/commit/80d9cfb9955702fe876288b274b46e3c6ca036da))
+
 ## [1.0.1](https://github.com/IvanNovR/pi-prompt-snippets/compare/v1.0.0...v1.0.1) (2026-11-10)
 
 
