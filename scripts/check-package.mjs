@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, mkdirSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, mkdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -34,7 +34,17 @@ try {
   assert.equal(lock.packages[''].version, pkg.version);
   const installed = join(temp, 'installed');
   mkdirSync(installed);
-  execFileSync('npm', ['install', '--offline', '--ignore-scripts', '--legacy-peer-deps', '--no-audit', '--no-fund', '--package-lock=false', join(temp, pack.filename)], { cwd: installed, stdio: 'inherit' });
+  const installFlags = ['--ignore-scripts', '--legacy-peer-deps', '--no-audit', '--no-fund', '--package-lock=false'];
+  // npm ci fetches locked tarballs, not necessarily registry metadata. Prepare
+  // the real declared runtime dependencies online in this isolated consumer;
+  // only the subsequent extension-tarball installation is an offline check.
+  // Do not install host peers or depend on a previously warmed npm cache.
+  const dependencies = Object.entries(pkg.dependencies).map(([name, version]) => `${name}@${version}`);
+  execFileSync('npm', ['install', ...installFlags, ...dependencies], { cwd: installed, stdio: 'inherit' });
+  execFileSync('npm', ['install', '--offline', ...installFlags, join(temp, pack.filename)], { cwd: installed, stdio: 'inherit' });
+  for (const peer of Object.keys(pkg.peerDependencies)) {
+    assert.equal(existsSync(join(installed, 'node_modules', peer)), false, `Unexpected installed host peer: ${peer}`);
+  }
   // Pi provides this peer at runtime. Use the locked local host copy, not a registry install.
   const scope = join(installed, 'node_modules', '@earendil-works');
   mkdirSync(scope, { recursive: true });
@@ -69,7 +79,7 @@ try {
       assert.equal(readdirSync(snippets).filter(name => name.endsWith('.md')).length, 6);
     `], { cwd: installed, stdio: 'inherit' });
   }
-  console.log(`Tarball allowlist, manifest, offline installation, source/compiled registration and bundled snippet smoke passed (${files.length} files).`);
+  console.log(`Tarball allowlist, manifest, online runtime dependency preparation, offline tarball installation without peers, source/compiled registration and bundled snippet smoke passed (${files.length} files).`);
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }
