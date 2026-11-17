@@ -22,6 +22,7 @@ try {
   const pkg = JSON.parse(readFileSync(join(root, 'package.json')));
   assert.equal(pkg.name, '@ivannovr/pi-prompt-snippets');
   assert.ok(pkg.keywords.includes('pi-package'));
+  assert.equal(pkg.dependencies['@aliou/pi-utils-settings'], '0.24.1');
   assert.equal(pkg.publishConfig?.registry, undefined, 'Registry must remain selectable');
   const image = new URL(pkg.pi.image);
   assert.equal(image.origin, 'https://raw.githubusercontent.com');
@@ -37,7 +38,9 @@ try {
   // Pi provides this peer at runtime. Use the locked local host copy, not a registry install.
   const scope = join(installed, 'node_modules', '@earendil-works');
   mkdirSync(scope, { recursive: true });
-  symlinkSync(join(root, 'node_modules', '@earendil-works', 'pi-tui'), join(scope, 'pi-tui'), 'dir');
+  for (const peer of ['pi-tui', 'pi-coding-agent']) {
+    symlinkSync(join(root, 'node_modules', '@earendil-works', peer), join(scope, peer), 'dir');
+  }
   // Use Pi's locked Jiti dependency for TypeScript in node_modules; native
   // Node type stripping intentionally refuses installed TypeScript packages.
   const hostRequire = createRequire(import.meta.resolve('@earendil-works/pi-coding-agent'));
@@ -54,7 +57,9 @@ try {
       os.homedir = () => ${JSON.stringify(fixtureHome)};
       syncBuiltinESMExports();
       const entryURL = ${JSON.stringify(pathToFileURL(join(installed, 'node_modules', '@ivannovr', 'pi-prompt-snippets', entry)).href)};
-      const extension = ${entry === 'index.ts' ? `await (await import(${JSON.stringify(jitiURL)})).createJiti(import.meta.url, { tryNative: false, moduleCache: false, fsCache: false }).import(entryURL, { default: true })` : '(await import(entryURL)).default'};
+      // Both entries import the TS-only settings package. Pi's Jiti loader,
+      // not native Node import, is the supported execution environment.
+      const extension = await (await import(${JSON.stringify(jitiURL)})).createJiti(import.meta.url, { esmResolve: true }).import(entryURL, { default: true });
       const handlers = new Map();
       extension({ on: (name, fn) => handlers.set(name, fn), registerShortcut() {}, registerCommand() {} });
       assert.ok(handlers.has('session_start'));

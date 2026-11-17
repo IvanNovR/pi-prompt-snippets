@@ -4,16 +4,17 @@
  * Each snippet is a markdown file with frontmatter (name, description,
  * placement, order, persistent), stored in `~/.pi/agent/snippets/`.
  *
- * - Press alt+s or run /snippets to open the toggle menu (space: cycle state,
- *   tab: preview, enter: apply, esc: cancel). The menu is a bordered,
- *   scrollable view.
+ * - Press alt+s or run /snippets to open the selection UI. Space or Enter
+ *   cycles snippet state (off -> temporary -> persistent -> off). Esc saves
+ *   and applies changes.
  * - Active snippets are displayed as a widget above the editor, with visual
  *   distinction between prepend and append groups.
- * - On message submit, active snippet bodies are added to the beginning/end
- *   of the message text in order (prepend group sorted by `order` first, then
- *   user text, then append group sorted by `order`).
- * - Manual toggles reset after submit. Persistent snippets automatically apply
- *   only until the session records its first user message (excluding JSON mode).
+ * - The unified Visibility setting controls injection mode:
+ *   - Visible: injected through input before display (default)
+ *   - Hidden: injected through message_end after initial display
+ * - Manual toggles reset on input transform (Visible) or recording (Hidden).
+ *   Persistent snippets automatically apply until the first user recording
+ *   (excluding JSON mode). Multiple pre-record Visible inputs may all receive them.
  */
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
@@ -22,6 +23,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+	SectionedSettings,
+	type SectionedSettingItem,
+	type SettingsSection,
+	getSettingsTheme,
+} from "@aliou/pi-utils-settings";
 
 interface Snippet {
 	/** Filename, e.g. "concise.md" */
@@ -40,8 +47,11 @@ interface SnippetState {
 	persistent: boolean;
 }
 
+type VisibilityMode = "visible" | "hidden";
+
 const extensionDir = dirname(fileURLToPath(import.meta.url));
 const snippetsDir = join(homedir(), ".pi", "agent", "snippets");
+const configPath = join(homedir(), ".pi", "agent", "prompt-snippets-config.json");
 const WIDGET_ID = "prompt-snippets";
 
 function parseSnippet(filename: string, raw: string): Snippet | null {
@@ -74,10 +84,15 @@ function parseSnippet(filename: string, raw: string): Snippet | null {
 /** Copy default snippets on first run */
 function copyDefaultSnippets() {
 	// Source entry lives at the package root; the compiled entry lives in dist/.
-	const defaultSnippetsDir = [join(extensionDir, "snippets"), join(extensionDir, "..", "snippets")]
-		.find((path) => existsSync(path));
+	// Try multiple possible locations for bundled snippets
+	const possibleLocations = [
+		join(extensionDir, "snippets"),       // Same directory (source case)
+		join(extensionDir, "..", "snippets"), // Parent directory (compiled case)
+	];
+
+	const defaultSnippetsDir = possibleLocations.find((path) => existsSync(path));
 	if (!defaultSnippetsDir) return;
-	if (!existsSync(defaultSnippetsDir)) return;
+
 	if (!existsSync(snippetsDir)) mkdirSync(snippetsDir, { recursive: true });
 
 	for (const file of readdirSync(defaultSnippetsDir)) {
@@ -113,13 +128,42 @@ function loadSnippets(): Snippet[] {
 	];
 }
 
+function loadVisibility(): VisibilityMode {
+	try {
+		if (existsSync(configPath)) {
+			const config = JSON.parse(readFileSync(configPath, "utf8"));
+			return config.visibility === "hidden" ? "hidden" : "visible";
+		}
+	} catch {
+		// Fall through to default
+	}
+	return "visible";
+}
+
+function saveVisibility(visibility: VisibilityMode) {
+	try {
+		const dir = dirname(configPath);
+		if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+		writeFileSync(configPath, JSON.stringify({ visibility }, null, 2), "utf8");
+	} catch {
+		// Ignore save errors
+	}
+}
+
 export default function (pi: ExtensionAPI) {
 	// Snippets last seen on disk (sorted). Refreshed when menu opens or message submits.
 	let snippets: Snippet[] = [];
-	// IDs of currently enabled snippets. Reset to empty after each submit and on session start.
-	let enabled = new Set<string>();
-	// Automatic selection survives rejected/intercepted input, unlike manual toggles.
-	let automaticSelection = false;
+	// Manual selection: Visible consumes on transform; Hidden consumes on recording.
+	let manualEnabled = new Set<string>();
+	// Automatic eligibility: survives rejected inputs, consumed only at message_end
+	let automaticEligible = false;
+	// Automatic selection IDs: what persistent snippets to apply on first recorded message
+	let automaticEnabled = new Set<string>();
+	// IDs actually inserted by Visible input since the last user recording.
+	// A mid-flight switch to Hidden must not insert those IDs a second time.
+	let visiblyApplied = new Set<string>();
+	// Visibility mode: visible (inject through input) or hidden (inject through message_end)
+	let visibility: VisibilityMode = "visible";
 
 	function hasRecordedUserMessage(ctx: ExtensionContext): boolean {
 		// Deliberately inspect all history, including abandoned/compacted branches.
@@ -129,7 +173,9 @@ export default function (pi: ExtensionAPI) {
 
 	function updateWidget(ctx: ExtensionContext) {
 		if (!ctx.hasUI || ctx.mode !== "tui") return;
-		const active = snippets.filter((s) => enabled.has(s.id));
+		// Show both manual and automatic selections
+		const allEnabled = new Set([...manualEnabled, ...automaticEnabled]);
+		const active = snippets.filter((s) => allEnabled.has(s.id));
 		const prepends = active.filter((s) => s.placement === "prepend");
 		const appends = active.filter((s) => s.placement === "append");
 
@@ -194,62 +240,127 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		snippets = loadSnippets();
+		visibility = loadVisibility();
 		// Remove toggles for snippets no longer on disk.
-		enabled = new Set([...enabled].filter((id) => snippets.some((s) => s.id === id)));
+		manualEnabled = new Set([...manualEnabled].filter((id) => snippets.some((s) => s.id === id)));
+		automaticEnabled = new Set([...automaticEnabled].filter((id) => snippets.some((s) => s.id === id)));
 
-		if (snippets.length === 0) {
-			ctx.ui.notify(`No snippets found in ${snippetsDir}`, "warning");
-			updateWidget(ctx);
-			return;
-		}
-
-		// Working copy of snippet states; committed to `enabled` only on confirm.
+		// Working copy; changed snippet states are applied on close (Esc).
 		const working = new Map<string, SnippetState>();
 		for (const snippet of snippets) {
+			const isEnabled = manualEnabled.has(snippet.id) || (automaticEligible && automaticEnabled.has(snippet.id));
 			working.set(snippet.id, {
-				enabled: enabled.has(snippet.id),
+				enabled: isEnabled,
 				persistent: snippet.persistent ?? false,
 			});
 		}
 
-		const confirmed = await ctx.ui.custom<boolean>((tui, theme, _keybindings, done) => {
+		// Compare final intent with the menu-open snapshot, not live state: an
+		// input or recording can consume selections while this screen is open.
+		const initial = new Map([...working].map(([id, state]) => [id, { ...state }]));
+		let workingVisibility = visibility;
+		let previewSnippet: Snippet | null = null;
+		let previewScroll = 0;
+
+		await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+			const settingsTheme = getSettingsTheme(theme);
 			const prepends = snippets.filter((s) => s.placement === "prepend");
 			const appends = snippets.filter((s) => s.placement === "append");
-			const items = [...prepends, ...appends];
 
+			const buildSections = (): SettingsSection[] => {
+				const prependItems: SectionedSettingItem[] = prepends.map((snippet) => {
+					const state = working.get(snippet.id)!;
+					const status = !state.enabled ? "off" : state.persistent ? "persistent" : "temporary";
+					return {
+						id: snippet.id,
+						label: snippet.name,
+						description: snippet.description,
+						currentValue: status,
+						values: ["off", "temporary", "persistent"],
+					};
+				});
+
+				const appendItems: SectionedSettingItem[] = appends.map((snippet) => {
+					const state = working.get(snippet.id)!;
+					const status = !state.enabled ? "off" : state.persistent ? "persistent" : "temporary";
+					return {
+						id: snippet.id,
+						label: snippet.name,
+						description: snippet.description,
+						currentValue: status,
+						values: ["off", "temporary", "persistent"],
+					};
+				});
+
+				const settingsItems: SectionedSettingItem[] = [
+					{
+						id: "visibility",
+						label: "Visibility",
+						description: "Visible: inject before display (input transform). Hidden: inject after display (message_end). Model receives full content in both modes.",
+						currentValue: workingVisibility === "visible" ? "Visible" : "Hidden",
+						values: ["Visible", "Hidden"],
+					},
+				];
+
+				return [
+					{ label: "Prepend — inserted before your message", items: prependItems },
+					{ label: "Append — inserted after your message", items: appendItems },
+					{ label: "Settings", items: settingsItems },
+				];
+			};
+
+			let settingsComponent: SectionedSettings | null = null;
 			let mode: "list" | "preview" = "list";
-			let cursor = 0;
-			let listScroll = 0;
-			let previewScroll = 0;
+			// Search is disabled; own navigation so Tab can use the same public
+			// selectItem API as the list, without inspecting library internals.
+			const itemIds = [...prepends, ...appends].map((snippet) => snippet.id).concat("visibility");
+			let selectedIndex = 0;
 
-			const itemRow = (snippet: Snippet, idx: number, width: number): string => {
-				const pointer = idx === cursor ? theme.fg("accent", "> ") : "  ";
-				const state = working.get(snippet.id)!;
-				const checkbox =
-					!state.enabled ? theme.fg("dim", "[ ]") :
-					state.persistent ? theme.fg("accent", "[🔒]") :
-					theme.fg("success", "[x]");
-				const desc = snippet.description ? theme.fg("dim", ` — ${snippet.description}`) : "";
-				return truncateToWidth(`${pointer}${checkbox} ${theme.bold(snippet.name)}${desc}`, width);
+			const rebuildSettings = () => {
+				if (settingsComponent) {
+					settingsComponent.updateSections(buildSections());
+					return;
+				}
+				settingsComponent = new SectionedSettings({
+					sections: buildSections(),
+					theme: settingsTheme,
+					onChange: (id: string, newValue: string) => {
+						if (id === "visibility") {
+							workingVisibility = newValue === "Hidden" ? "hidden" : "visible";
+							return;
+						}
+
+						const snippet = snippets.find((s) => s.id === id);
+						if (!snippet) return;
+
+						const state = working.get(id)!;
+						if (newValue === "off") {
+							state.enabled = false;
+							state.persistent = false;
+						} else if (newValue === "temporary") {
+							state.enabled = true;
+							state.persistent = false;
+						} else if (newValue === "persistent") {
+							state.enabled = true;
+							state.persistent = true;
+						}
+						rebuildSettings();
+					},
+					onCancel: () => done(),
+					maxVisible: 15,
+					enableSearch: false,
+					hideHint: true,
+				});
 			};
 
-			/** List rows with the item index each row corresponds to (null for headers/empty). */
-			const buildListRows = (width: number): { text: string; itemIndex: number | null }[] => {
-				const rows: { text: string; itemIndex: number | null }[] = [];
-				rows.push({ text: theme.fg("dim", "↑ PREPEND — inserted before your message"), itemIndex: null });
-				prepends.forEach((s, i) => rows.push({ text: itemRow(s, i, width), itemIndex: i }));
-				rows.push({ text: "", itemIndex: null });
-				rows.push({ text: theme.fg("dim", "↓ APPEND — inserted after your message"), itemIndex: null });
-				appends.forEach((s, i) => rows.push({ text: itemRow(s, prepends.length + i, width), itemIndex: prepends.length + i }));
-				return rows;
-			};
+			rebuildSettings();
 
 			const buildPreviewRows = (snippet: Snippet, width: number): string[] => {
 				const rows: string[] = [];
 				const state = working.get(snippet.id)!;
 				const statusLabel =
 					!state.enabled ? "" :
-					state.persistent ? " 🔒 persistent" :
+					state.persistent ? " (persistent)" :
 					" (temporary)";
 				rows.push(truncateToWidth(theme.bold(snippet.name) + statusLabel, width));
 				rows.push(truncateToWidth(theme.fg("dim", `${snippet.placement} · order ${snippet.order} · ${snippet.id}`), width));
@@ -262,26 +373,15 @@ export default function (pi: ExtensionAPI) {
 				return rows;
 			};
 
-			/**
-			 * Slice `lines` into a scrollable viewport of at most `maxView` rows,
-			 * reserving indicator slots when clipping. Returns visible rows
-			 * plus clamped scroll position. When `focusRow` is given, scrolls
-			 * to keep it visible.
-			 */
 			const viewport = (
 				lines: string[],
 				scroll: number,
 				maxView: number,
-				focusRow?: number,
 			): { out: string[]; scroll: number } => {
 				const clipped = lines.length > maxView;
 				const view = clipped ? Math.max(1, maxView - 2) : maxView;
 
 				let s = Math.min(Math.max(0, scroll), Math.max(0, lines.length - view));
-				if (focusRow !== undefined) {
-					if (focusRow < s) s = focusRow;
-					else if (focusRow >= s + view) s = focusRow - view + 1;
-				}
 
 				const visible = lines.slice(s, s + view);
 				if (!clipped) return { out: visible, scroll: s };
@@ -300,27 +400,22 @@ export default function (pi: ExtensionAPI) {
 
 			return {
 				render(width: number): string[] {
-					// Reserve lines for: top border, title, empty, empty, hints, bottom border.
 					const maxView = Math.max(5, tui.terminal.rows - 10);
 
 					let content: string[];
 					let title: string;
 					let hints: string;
+
 					if (mode === "list") {
-						const rows = buildListRows(width);
-						const cursorRow = rows.findIndex((r) => r.itemIndex === cursor);
-						const v = viewport(rows.map((r) => r.text), listScroll, maxView, cursorRow);
-						content = v.out;
-						listScroll = v.scroll;
+						content = settingsComponent!.render(width);
 						title = "Prompt snippets";
-						hints = "↑↓ navigate • Space cycle (off/temp/lock) • Tab preview • Enter apply • Esc cancel";
+						hints = "↑↓ navigate • Space/Enter cycle • Tab preview • Esc save & apply";
 					} else {
-						const snippet = items[cursor];
-						const rows = buildPreviewRows(snippet, width);
+						const rows = buildPreviewRows(previewSnippet!, width);
 						const v = viewport(rows, previewScroll, maxView);
 						content = v.out;
 						previewScroll = v.scroll;
-						title = `Preview: ${snippet.name}`;
+						title = `Preview: ${previewSnippet!.name}`;
 						hints = "↑↓ scroll • Tab/Esc back";
 					}
 
@@ -332,43 +427,44 @@ export default function (pi: ExtensionAPI) {
 						"",
 						truncateToWidth(theme.fg("dim", ` ${hints}`), width),
 						theme.fg("accent", "─".repeat(width)),
-					];
+					].map((line) => truncateToWidth(line, width));
 				},
-				invalidate() {},
+				invalidate() {
+					settingsComponent?.invalidate();
+				},
 				handleInput(data: string) {
 					if (mode === "list") {
-						if (matchesKey(data, Key.up)) {
-							cursor = (cursor - 1 + items.length) % items.length;
+						if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
+							selectedIndex = (selectedIndex + (matchesKey(data, Key.up) ? -1 : 1) + itemIds.length) % itemIds.length;
+							settingsComponent?.selectItem(itemIds[selectedIndex]);
 							tui.requestRender();
-						} else if (matchesKey(data, Key.down)) {
-							cursor = (cursor + 1) % items.length;
-							tui.requestRender();
-						} else if (matchesKey(data, Key.space)) {
-							const snippet = items[cursor];
-							const state = working.get(snippet.id)!;
-							// Cycle: off → temp → persistent → off
-							if (!state.enabled) {
-								state.enabled = true;
-								state.persistent = false;
-							} else if (!state.persistent) {
-								state.persistent = true;
-							} else {
-								state.enabled = false;
-								state.persistent = false;
+							return;
+						}
+						if (matchesKey(data, Key.tab)) {
+							const selectedId = itemIds[selectedIndex];
+							if (selectedId && selectedId !== "visibility") {
+								const snippet = snippets.find((s) => s.id === selectedId);
+								if (snippet) {
+									previewSnippet = snippet;
+									previewScroll = 0;
+									mode = "preview";
+									tui.requestRender();
+									return;
+								}
 							}
-							tui.requestRender();
-						} else if (matchesKey(data, Key.tab)) {
-							mode = "preview";
-							previewScroll = 0;
-							tui.requestRender();
-						} else if (matchesKey(data, Key.enter)) {
-							done(true);
+							// If Tab pressed on Visibility, do nothing (no preview)
+							return;
 						} else if (matchesKey(data, Key.escape)) {
-							done(false);
+							done();
+							return;
+						} else {
+							settingsComponent?.handleInput(data);
+							tui.requestRender();
 						}
 					} else {
+						// Preview mode
 						if (matchesKey(data, Key.up)) {
-							previewScroll--;
+							previewScroll = Math.max(0, previewScroll - 1);
 							tui.requestRender();
 						} else if (matchesKey(data, Key.down)) {
 							previewScroll++;
@@ -382,27 +478,33 @@ export default function (pi: ExtensionAPI) {
 			};
 		});
 
-		if (confirmed) {
-			// Even an explicit empty selection overrides automatic defaults.
-			automaticSelection = false;
-			// Update enabled set from working states
-			enabled = new Set(
-				[...working.entries()]
-					.filter(([_, state]) => state.enabled)
-					.map(([id, _]) => id)
-			);
-
-			// Write persistent flags back to disk
-			for (const snippet of snippets) {
-				const state = working.get(snippet.id)!;
-				if (state.persistent !== (snippet.persistent ?? false)) {
-					updateSnippetPersistent(snippet.id, state.persistent);
-				}
-			}
-
-			// Reload snippets to reflect the changes
-			snippets = loadSnippets();
+		// Apply only actual snippet edits. Opening/closing the menu or changing
+		// Visibility must neither promote automatic defaults to manual selections
+		// nor restore a selection consumed while the menu was open.
+		for (const [id, state] of working) {
+			const before = initial.get(id)!;
+			if (state.enabled === before.enabled && state.persistent === before.persistent) continue;
+			automaticEnabled.delete(id);
+			if (state.enabled) manualEnabled.add(id);
+			else manualEnabled.delete(id);
 		}
+
+		// Write persistent flags back to disk
+		for (const snippet of snippets) {
+			const state = working.get(snippet.id)!;
+			if (state.persistent !== (snippet.persistent ?? false)) {
+				updateSnippetPersistent(snippet.id, state.persistent);
+			}
+		}
+
+		// Save visibility setting
+		if (workingVisibility !== visibility) {
+			visibility = workingVisibility;
+			saveVisibility(visibility);
+		}
+
+		// Reload snippets to reflect the changes
+		snippets = loadSnippets();
 		updateWidget(ctx);
 	}
 
@@ -410,39 +512,51 @@ export default function (pi: ExtensionAPI) {
 		// Copy default snippets on first run
 		copyDefaultSnippets();
 
-		// Load snippets
+		// Load snippets and config
 		snippets = loadSnippets();
+		visibility = loadVisibility();
 
 		// A resumed/reloaded/forked session is eligible only if its retained history
 		// has no user message. Startup reason alone cannot establish eligibility.
-		automaticSelection = ctx.mode !== "json" && !hasRecordedUserMessage(ctx);
-		if (automaticSelection) {
-			enabled = new Set(snippets.filter((s) => s.persistent).map((s) => s.id));
+		automaticEligible = ctx.mode !== "json" && !hasRecordedUserMessage(ctx);
+		if (automaticEligible) {
+			automaticEnabled = new Set(snippets.filter((s) => s.persistent).map((s) => s.id));
 		} else {
-			enabled = new Set();
+			automaticEnabled = new Set();
 		}
+		manualEnabled = new Set();
+		visiblyApplied = new Set();
 
 		if (!existsSync(snippetsDir)) mkdirSync(snippetsDir, { recursive: true });
 		updateWidget(ctx);
 	});
 
 	pi.on("message_end", (event, ctx) => {
-		if (event.message.role !== "user" || !automaticSelection) return;
-		// Unlike manual input transforms, automatic snippets wrap finalized,
-		// expanded content. Pi's documented replacement API updates agent state
-		// and persists the returned message after this hook. Queued messages are
-		// therefore counted in recording order, not input/queue order.
-		const eligible = !hasRecordedUserMessage(ctx);
-		snippets = loadSnippets();
-		const active = eligible ? snippets.filter((s) => enabled.has(s.id)) : [];
-		automaticSelection = false;
-		enabled = new Set();
-		updateWidget(ctx);
-		if (active.length === 0) return;
+		if (event.message.role !== "user") return;
 
+		const content = event.message.content;
+		const ids = new Set<string>();
+		if (visibility === "hidden") {
+			for (const id of manualEnabled) ids.add(id);
+			if (automaticEligible && !hasRecordedUserMessage(ctx)) {
+				for (const id of automaticEnabled) ids.add(id);
+			}
+			manualEnabled = new Set();
+			for (const id of visiblyApplied) ids.delete(id);
+		}
+		visiblyApplied = new Set();
+		// Only a finalized user message consumes automatic eligibility. Visible
+		// inputs transformed before this recording retain their automatic snippets.
+		automaticEligible = false;
+		automaticEnabled = new Set();
+		updateWidget(ctx);
+		if (ids.size === 0) return;
+
+		snippets = loadSnippets();
+		const active = snippets.filter((snippet) => ids.has(snippet.id));
+		if (active.length === 0) return;
 		const prepend = active.filter((s) => s.placement === "prepend").map((s) => s.body);
 		const append = active.filter((s) => s.placement === "append").map((s) => s.body);
-		const content = event.message.content;
 		return {
 			message: {
 				...event.message,
@@ -459,31 +573,43 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("input", async (event, ctx) => {
 		// Also catch user entries inserted directly by another extension.
-		if (automaticSelection && hasRecordedUserMessage(ctx)) {
-			automaticSelection = false;
-			enabled = new Set();
+		if (automaticEligible && hasRecordedUserMessage(ctx)) {
+			automaticEligible = false;
+			automaticEnabled = new Set();
 			updateWidget(ctx);
 		}
-		// Automatic selection is applied at the recording boundary, not here.
-		if (automaticSelection || enabled.size === 0) return;
+
+		// When visibility is "hidden", don't transform input - let message_end handle it
+		if (visibility === "hidden") {
+			return;
+		}
+
+		// Determine which snippets to apply: manual (one-shot) or automatic (eligible)
+		const hasManual = manualEnabled.size > 0;
+		const hasAutomatic = automaticEligible && automaticEnabled.size > 0;
+		if (!hasManual && !hasAutomatic) return;
 
 		snippets = loadSnippets();
-		const active = snippets.filter((s) => enabled.has(s.id));
+		// Combine manual and automatic selections for this transform
+		const allEnabled = new Set([...manualEnabled, ...automaticEnabled]);
+		const active = snippets.filter((s) => allEnabled.has(s.id));
 
-		// Manual selections remain one-shot. Automatic defaults are consumed only
-		// when a user message is recorded, not when a preflight attempt begins.
-		if (!automaticSelection) {
-			enabled = new Set();
+		// Manual selections are one-shot: clear immediately after transform
+		if (hasManual) {
+			manualEnabled = new Set();
 			updateWidget(ctx);
 		}
 
 		if (active.length === 0) return; // all enabled snippets disappeared from disk
+		for (const snippet of active) visiblyApplied.add(snippet.id);
 
 		const prependBodies = active.filter((s) => s.placement === "prepend").map((s) => s.body);
 		const appendBodies = active.filter((s) => s.placement === "append").map((s) => s.body);
+		const transformed = [...prependBodies, event.text, ...appendBodies].join("\n\n");
+
 		return {
 			action: "transform",
-			text: [...prependBodies, event.text, ...appendBodies].join("\n\n"),
+			text: transformed,
 		};
 	});
 
