@@ -22,7 +22,8 @@ For a local checkout: `pi install /absolute/path/to/pi-prompt-snippets`. Run `/r
 
 ## Usage
 
-Open **`/snippets`** or press **Alt+S**.
+Run **`/snippets`** (or **`/snippets settings`**) to open settings,
+or press **Alt+S**. Arguments support native Tab completion.
 
 | Key | Action |
 | --- | --- |
@@ -137,8 +138,19 @@ Frontmatter supports simple `key: value` lines, not full YAML.
 The `---` frontmatter delimiters and a nonempty body are required. Fields may be omitted to use their defaults.
 Files are reread when opening the menu or applying snippets.
 
+## Bundled defaults
+
+Bundled snippets are copied to `~/.pi/agent/snippets/` on first start
+without overwriting existing files. Updates add only new defaults.
+You can edit or delete them. Deleted defaults stay deleted.
+
+Run `/snippets restore` to restore bundled defaults with confirmation.
+This recreates missing files and overwrites changes to bundled snippets.
+Other custom files are left untouched.
+
 > [!NOTE]
-> Missing bundled snippets are restored at session startup; existing files are left unchanged. Edit a bundled snippet to customize it—deleting it does not permanently remove it.
+> Use `/snippets restore --yes` to skip confirmation.
+> Without an interactive UI (for example, in JSON mode), `--yes` is required.
 
 ## Credits
 
