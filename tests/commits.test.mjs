@@ -66,6 +66,7 @@ test('accepts breaking-change and release bot conventional subjects', () => {
     commit('b', 'fix(parser)!: remove obsolete syntax'),
     commit('c', 'chore(main): release 1.0.0'),
     commit('d', 'revert: undo an earlier change'),
+    commit('e', 'ci: ignore merge commits in commit checks'),
   ]).error, undefined);
 });
 
