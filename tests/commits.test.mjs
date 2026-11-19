@@ -42,10 +42,14 @@ test('checks every commit in the supplied base..head range', () => {
   assert.deepEqual(result.calls.filter(args => args[2] === '--format=%s').map(args => args.at(-1)), ['new', 'older']);
 });
 
-test('reports all invalid commits, including one hidden before a valid tip', () => {
-  const result = check([commit('tip', 'fix: valid tip'), commit('bad1', 'not conventional'), commit('bad2', 'Merge pull request #1')]);
+test('reports all invalid non-merge commits, including one hidden before a valid tip', () => {
+  const result = check([
+    commit('tip', 'fix: valid tip'),
+    commit('bad1', 'not conventional'),
+    commit('merge', 'Merge pull request #1', 'parent1 parent2'),
+  ]);
   assert.match(result.error, /bad1: not conventional/);
-  assert.match(result.error, /bad2: Merge pull request/);
+  assert.doesNotMatch(result.error, /merge: Merge pull request/);
   assert.equal(result.calls.filter(args => args[2] === '--format=%s').length, 3);
 });
 

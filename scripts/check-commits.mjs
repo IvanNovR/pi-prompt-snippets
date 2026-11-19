@@ -12,6 +12,7 @@ const range = base && !/^0+$/.test(base) ? `${base}..${head}` : head;
 for (const sha of git('rev-list', range).split('\n').filter(Boolean)) {
   const subject = git('show', '-s', '--format=%s', sha);
   const parents = git('show', '-s', '--format=%P', sha);
+  if (parents.trim().split(/\s+/).filter(Boolean).length > 1) continue;
   if (sha === historicalRoot && subject === 'Initial commit' && !parents) continue;
   if (!conventional.test(subject)) failures.push(`${sha}: ${subject}`);
 }
