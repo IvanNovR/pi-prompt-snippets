@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.1.1](https://github.com/IvanNovR/pi-prompt-snippets/compare/v1.1.0...v1.1.1) (2026-11-19)
+
+
+### Features
+
+* **snippets:** improve snippet management ([#5](https://github.com/IvanNovR/pi-prompt-snippets/issues/5)) ([4614373](https://github.com/IvanNovR/pi-prompt-snippets/commit/46143730e031c9ad2b397d6536c377ec33b36651))
+
+
+### Bug Fixes
+
+* **ci:** prevent duplicate workflow runs ([#4](https://github.com/IvanNovR/pi-prompt-snippets/issues/4)) ([cbdf548](https://github.com/IvanNovR/pi-prompt-snippets/commit/cbdf5489ce97ef9750896e0cf46445ae4d8a9931))
+
+
+### Miscellaneous Chores
+
+* synchronize main into dev ([cc6c6d4](https://github.com/IvanNovR/pi-prompt-snippets/commit/cc6c6d455504b5713caf366821a4c7b119458fa0))
+
 ## [1.1.0](https://github.com/IvanNovR/pi-prompt-snippets/compare/v1.0.1...v1.1.0) (2026-11-17)
 
 ### Features
