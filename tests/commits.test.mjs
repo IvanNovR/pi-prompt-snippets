@@ -6,6 +6,7 @@ import { test } from 'node:test';
 
 const script = pathToFileURL(resolve('scripts/check-commits.mjs')).href;
 const historicalRoot = 'a90c48ecebeee15614da720f2bf5c70ae434cbed';
+const legacyMergeCheckFix = 'e01f2f8181e738a3735234f850baba1b07fb2c30';
 
 // Stub git responses rather than initialize a repository or alter local history.
 function check(commits, { base, head, title } = {}) {
@@ -58,6 +59,11 @@ test('only the verified root SHA, subject and parentlessness are exempt', () => 
   assert.match(check([commit('another-root', 'Initial commit', '')]).error, /another-root/);
   assert.match(check([commit(historicalRoot, 'Initial commit', 'parent')]).error, /Initial commit/);
   assert.match(check([commit(historicalRoot, 'Unverified initial subject', '')]).error, /Unverified/);
+});
+
+test('exempts the published merge-check transition commit by exact SHA and subject', () => {
+  assert.equal(check([commit(legacyMergeCheckFix, 'Ignore merge commits in commit checks')]).error, undefined);
+  assert.match(check([commit(legacyMergeCheckFix, 'Different subject')]).error, /Different subject/);
 });
 
 test('accepts breaking-change and release bot conventional subjects', () => {
