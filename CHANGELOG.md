@@ -2,20 +2,22 @@
 
 ## [1.1.1](https://github.com/IvanNovR/pi-prompt-snippets/compare/v1.1.0...v1.1.1) (2026-11-19)
 
-
 ### Features
 
-* **snippets:** improve snippet management ([#5](https://github.com/IvanNovR/pi-prompt-snippets/issues/5)) ([4614373](https://github.com/IvanNovR/pi-prompt-snippets/commit/46143730e031c9ad2b397d6536c377ec33b36651))
-
+* Add `/snippets restore` to recreate missing bundled snippets and replace edits to current bundled files while preserving saved selection modes and leaving other custom files untouched. Confirmation is required unless `--yes` is supplied. Without an interactive UI, including JSON mode, `--yes` is required. Newly restored snippets are not automatically activated. ([4614373](https://github.com/IvanNovR/pi-prompt-snippets/commit/46143730e031c9ad2b397d6536c377ec33b36651))
+* Add `/snippets settings` as an explicit alias for the settings menu, with native Tab completion for settings, restore, and restore --yes.
 
 ### Bug Fixes
 
-* **ci:** prevent duplicate workflow runs ([#4](https://github.com/IvanNovR/pi-prompt-snippets/issues/4)) ([cbdf548](https://github.com/IvanNovR/pi-prompt-snippets/commit/cbdf5489ce97ef9750896e0cf46445ae4d8a9931))
+* Remember previously encountered bundled filenames so deleted defaults stay deleted across sessions, updates, and reinstalls. Updates add only previously unseen bundled filenames without overwriting existing files.
 
+### Refactoring
 
-### Miscellaneous Chores
+* Split the extension into focused modules and update entry points, build cleanup, and package validation for source and compiled installations.
 
-* synchronize main into dev ([cc6c6d4](https://github.com/IvanNovR/pi-prompt-snippets/commit/cc6c6d455504b5713caf366821a4c7b119458fa0))
+### Infrastructure
+
+* Improve repository CI and the dev-to-main release workflow. ([cbdf548](https://github.com/IvanNovR/pi-prompt-snippets/commit/cbdf5489ce97ef9750896e0cf46445ae4d8a9931), [7cd36d5](https://github.com/IvanNovR/pi-prompt-snippets/commit/7cd36d54d8a19386352e17a273dde0645c359033))
 
 ## [1.1.0](https://github.com/IvanNovR/pi-prompt-snippets/compare/v1.0.1...v1.1.0) (2026-11-17)
 
