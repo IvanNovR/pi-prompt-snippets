@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.1.1](https://github.com/IvanNovR/pi-prompt-snippets/compare/v1.1.0...v1.1.1) (2026-11-19)
+
+### Features
+
+* Add `/snippets restore` to recreate missing bundled snippets and replace edits to current bundled files while preserving saved selection modes and leaving other custom files untouched. Confirmation is required unless `--yes` is supplied. Without an interactive UI, including JSON mode, `--yes` is required. Newly restored snippets are not automatically activated. ([4614373](https://github.com/IvanNovR/pi-prompt-snippets/commit/46143730e031c9ad2b397d6536c377ec33b36651))
+* Add `/snippets settings` as an explicit alias for the settings menu, with native Tab completion for settings, restore, and restore --yes.
+
+### Bug Fixes
+
+* Remember previously encountered bundled filenames so deleted defaults stay deleted across sessions, updates, and reinstalls. Updates add only previously unseen bundled filenames without overwriting existing files.
+
+### Refactoring
+
+* Split the extension into focused modules and update entry points, build cleanup, and package validation for source and compiled installations.
+
+### Infrastructure
+
+* Improve repository CI and the dev-to-main release workflow. ([cbdf548](https://github.com/IvanNovR/pi-prompt-snippets/commit/cbdf5489ce97ef9750896e0cf46445ae4d8a9931), [7cd36d5](https://github.com/IvanNovR/pi-prompt-snippets/commit/7cd36d54d8a19386352e17a273dde0645c359033))
+
 ## [1.1.0](https://github.com/IvanNovR/pi-prompt-snippets/compare/v1.0.1...v1.1.0) (2026-11-17)
 
 ### Features
