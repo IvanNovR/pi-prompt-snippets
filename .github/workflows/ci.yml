@@ -8,10 +8,12 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: 'PR to validate (required with expected_sha)'
+        description: 'Automation PR number'
+        required: true
         type: string
       expected_sha:
-        description: 'Exact PR head SHA; fails if the PR has moved'
+        description: 'Exact PR head SHA'
+        required: true
         type: string
 
 permissions:
@@ -28,39 +30,53 @@ jobs:
       base: ${{ steps.source.outputs.base }}
       title: ${{ steps.source.outputs.title }}
     steps:
-      - name: Resolve and verify the exact source
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Resolve exact source and branch policy
         id: source
         env:
           GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number }}
           EXPECTED_SHA: ${{ inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
           EVENT_NAME: ${{ github.event_name }}
-          WORKFLOW_SHA: ${{ github.sha }}
+          WORKFLOW_REF: ${{ github.ref }}
           PUSH_BASE: ${{ github.event.before }}
-          DISPATCH_SHA: ${{ inputs.expected_sha }}
-        shell: bash
+          RELEASE_AUTOMATION_READY: ${{ vars.RELEASE_AUTOMATION_READY }}
+          PUBLICATION_READY: ${{ vars.PUBLICATION_READY }}
         run: |
-          set -euo pipefail
-          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
-          if [[ -n "$PR_NUMBER" ]]; then
-            [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
-            pr=$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER")
-            jq -e --arg sha "$EXPECTED_SHA" '.state == "open" and .head.sha == $sha' <<< "$pr" > /dev/null
-            if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
-              test "$WORKFLOW_SHA" = "$EXPECTED_SHA"
-              jq -e --arg repo "$REPOSITORY" '.head.repo.full_name == $repo and .base.ref == "main"' <<< "$pr" > /dev/null
+          export TRUSTED_MAIN_SHA="$(git rev-parse HEAD)"
+          if [ -n "$PR_NUMBER" ]; then
+            [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
+            [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+            git fetch --no-tags origin "pull/$PR_NUMBER/head"
+            test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_SHA"
+            if ! git cat-file -e "$TRUSTED_MAIN_SHA:scripts/release-automation.mjs" 2>/dev/null; then
+              # Initial installation only. PR code runs with read-only permissions.
+              test "$EVENT_NAME" = pull_request
+              test -z "$(git ls-tree "$TRUSTED_MAIN_SHA" -- scripts/release-policy.mjs)"
+              export INITIAL_INSTALL=true
+              git checkout --detach "$EXPECTED_SHA"
             fi
-            echo "base=$(jq -r '.base.sha' <<< "$pr")" >> "$GITHUB_OUTPUT"
-            # Encode potentially untrusted PR titles as one JSON line, not output syntax.
-            echo "title=$(jq -c '.title' <<< "$pr")" >> "$GITHUB_OUTPUT"
+            node scripts/release-automation.mjs ci
           else
-            if [[ "$EVENT_NAME" == workflow_dispatch && -n "$DISPATCH_SHA" ]]; then
-              echo 'expected_sha requires pr_number'; exit 1
-            fi
-            echo "base=$PUSH_BASE" >> "$GITHUB_OUTPUT"
+            printf 'sha=%s\nbase=%s\n' "$EXPECTED_SHA" "$PUSH_BASE" >> "$GITHUB_OUTPUT"
           fi
-          echo "sha=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
+
+  branch-policy:
+    needs: source
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          SOURCE_RESULT: ${{ needs.source.result }}
+        run: test "$SOURCE_RESULT" = success
 
   commits:
     needs: source
@@ -75,7 +91,7 @@ jobs:
         with:
           node-version: '24.21.0'
           package-manager-cache: false
-      - name: Check every new commit and PR title
+      - name: Check every retained subject and PR title
         env:
           BASE_SHA: ${{ needs.source.outputs.base }}
           HEAD_SHA: ${{ needs.source.outputs.sha }}
@@ -98,3 +114,28 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run check:package
+
+  report-checks:
+    needs: [source, branch-policy, commits, package]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Report required checks on revalidated exact automation PR head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: node scripts/report-checks.mjs
