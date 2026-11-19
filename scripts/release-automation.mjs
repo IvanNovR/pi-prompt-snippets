@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { route, pending, tagged, promotion, versionFiles, releaseIdentity } from './release-policy.mjs';
+import { route, pending, tagged, promotion, versionFiles, releaseIdentity, installation } from './release-policy.mjs';
 const repo = process.env.GITHUB_REPOSITORY;
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 async function api(path, method = 'GET', body, missing = false) {
@@ -50,6 +50,15 @@ if (operation === 'ci') {
   assert.equal(pr.state, 'open');
   assert.equal(pr.head.sha, process.env.EXPECTED_SHA, 'PR head moved');
   const kind = route(pr, repo);
+  const initial = process.env.INITIAL_INSTALL === 'true';
+  if (initial) {
+    assert.equal(process.env.EVENT_NAME, 'pull_request', 'Installation fallback is ordinary PR CI only');
+    assert(/^[0-9a-f]{40}$/.test(process.env.TRUSTED_MAIN_SHA), 'Immutable trusted main SHA required');
+    assert.equal(git('rev-parse', 'origin/main'), process.env.TRUSTED_MAIN_SHA, 'Trusted main moved');
+    assert.equal(git('ls-tree', process.env.TRUSTED_MAIN_SHA, '--', 'scripts/release-automation.mjs', 'scripts/release-policy.mjs'), '', 'Pipeline already installed or partially installed');
+    assert.equal(process.env.RELEASE_AUTOMATION_READY, 'false', 'Installation requires release automation explicitly disabled');
+    assert.equal(process.env.PUBLICATION_READY, 'false', 'Installation requires publication explicitly disabled');
+  }
   if (process.env.EVENT_NAME === 'workflow_dispatch') {
     assert(['preparation', 'sync'].includes(kind), 'Dispatch only for automation PRs');
     assert.equal(pr.user.login, 'github-actions[bot]');
@@ -58,11 +67,20 @@ if (operation === 'ci') {
   if (pr.base.ref === 'dev') {
     if (pr.head.ref === 'main') {
       assert.equal(pr.head.repo?.full_name, repo);
+      assert.equal(pr.head.sha, git('rev-parse', 'origin/main'), 'Synchronization head differs from trusted main');
+      ancestor(pr.base.sha, pr.head.sha);
       assert.equal(incomplete.length, 0, 'Publication incomplete, synchronization blocked');
     } else assert.equal(incomplete.length, 0, 'Release freeze: no dev changes until publication and sync');
     const latest = preparations.find(p => p.merged_at && tagged(p));
     if (latest && pr.head.ref !== 'main') ancestor(`v${versions(latest.merge_commit_sha).version}`, pr.base.sha);
     if (kind === 'work') ancestor(pr.base.sha, pr.head.sha);
+  } else if (initial) {
+    assert.equal(incomplete.length, 0, 'Installation cannot overlap a release cycle');
+    assert.equal(pr.base.sha, process.env.TRUSTED_MAIN_SHA, 'Installation base differs from trusted main');
+    ancestor(pr.base.sha, pr.head.sha);
+    const bytes = (sha, file) => execFileSync('git', ['show', `${sha}:${file}`], { encoding: 'utf8' });
+    const snapshot = sha => ({ ...versions(sha), manifest: bytes(sha, '.release-please-manifest.json'), changelog: bytes(sha, 'CHANGELOG.md') });
+    installation(pr, repo, snapshot(pr.base.sha), snapshot(pr.head.sha), { release: process.env.RELEASE_AUTOMATION_READY, publication: process.env.PUBLICATION_READY });
   } else {
     assert.equal(incomplete.length, 1, 'Promotion requires pending preparation');
     assert.equal(incomplete[0].merge_commit_sha, pr.head.sha, 'Promotion contains unprepared changes');

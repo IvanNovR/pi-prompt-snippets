@@ -6,6 +6,7 @@ import { test } from 'node:test';
 
 const script = pathToFileURL(resolve('scripts/check-commits.mjs')).href;
 const historicalRoot = 'a90c48ecebeee15614da720f2bf5c70ae434cbed';
+const legacyMergeCheckFix = 'e01f2f8181e738a3735234f850baba1b07fb2c30';
 
 // Stub git responses rather than initialize a repository or alter local history.
 function check(commits, { base, head, title } = {}) {
@@ -42,10 +43,14 @@ test('checks every commit in the supplied base..head range', () => {
   assert.deepEqual(result.calls.filter(args => args[2] === '--format=%s').map(args => args.at(-1)), ['new', 'older']);
 });
 
-test('reports all invalid commits, including one hidden before a valid tip', () => {
-  const result = check([commit('tip', 'fix: valid tip'), commit('bad1', 'not conventional'), commit('bad2', 'Merge pull request #1')]);
+test('reports all invalid non-merge commits, including one hidden before a valid tip', () => {
+  const result = check([
+    commit('tip', 'fix: valid tip'),
+    commit('bad1', 'not conventional'),
+    commit('merge', 'Merge pull request #1', 'parent1 parent2'),
+  ]);
   assert.match(result.error, /bad1: not conventional/);
-  assert.match(result.error, /bad2: Merge pull request/);
+  assert.doesNotMatch(result.error, /merge: Merge pull request/);
   assert.equal(result.calls.filter(args => args[2] === '--format=%s').length, 3);
 });
 
@@ -56,12 +61,18 @@ test('only the verified root SHA, subject and parentlessness are exempt', () => 
   assert.match(check([commit(historicalRoot, 'Unverified initial subject', '')]).error, /Unverified/);
 });
 
+test('exempts the published merge-check transition commit by exact SHA and subject', () => {
+  assert.equal(check([commit(legacyMergeCheckFix, 'Ignore merge commits in commit checks')]).error, undefined);
+  assert.match(check([commit(legacyMergeCheckFix, 'Different subject')]).error, /Different subject/);
+});
+
 test('accepts breaking-change and release bot conventional subjects', () => {
   assert.equal(check([
     commit('a', 'feat!: change format'),
     commit('b', 'fix(parser)!: remove obsolete syntax'),
     commit('c', 'chore(main): release 1.0.0'),
     commit('d', 'revert: undo an earlier change'),
+    commit('e', 'ci: ignore merge commits in commit checks'),
   ]).error, undefined);
 });
 

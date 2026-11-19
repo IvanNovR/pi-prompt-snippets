@@ -25,6 +25,15 @@ export function route(pr, repo) {
   }
   return 'work';
 }
+export function installation(pr, repo, base, head, flags) {
+  assert.equal(route(pr, repo), 'promotion');
+  assert.notEqual(pr.user?.login, 'github-actions[bot]', 'Installation must be reviewed human work');
+  assert.equal(flags.release, 'false', 'Installation requires release automation explicitly disabled');
+  assert.equal(flags.publication, 'false', 'Installation requires publication explicitly disabled');
+  assert.equal(base.version, head.version, 'Installation cannot change version');
+  assert.equal(base.manifest, head.manifest, 'Installation cannot change manifest');
+  assert.equal(base.changelog, head.changelog, 'Installation cannot change changelog');
+}
 export function pending(pr) { return pr.labels.some(l => l.name === 'autorelease: pending'); }
 export function tagged(pr) { return pr.labels.some(l => l.name === 'autorelease: tagged'); }
 export function versionFiles(pkg, lock, manifest, changelog) {

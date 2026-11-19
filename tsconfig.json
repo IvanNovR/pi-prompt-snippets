@@ -15,6 +15,6 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true
   },
-  "include": ["index.ts"],
+  "include": ["pi-extension/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

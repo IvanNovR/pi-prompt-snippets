@@ -48,9 +48,22 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           WORKFLOW_REF: ${{ github.ref }}
           PUSH_BASE: ${{ github.event.before }}
+          RELEASE_AUTOMATION_READY: ${{ vars.RELEASE_AUTOMATION_READY }}
+          PUBLICATION_READY: ${{ vars.PUBLICATION_READY }}
         run: |
+          export TRUSTED_MAIN_SHA="$(git rev-parse HEAD)"
           if [ -n "$PR_NUMBER" ]; then
+            [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
+            [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
             git fetch --no-tags origin "pull/$PR_NUMBER/head"
+            test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_SHA"
+            if ! git cat-file -e "$TRUSTED_MAIN_SHA:scripts/release-automation.mjs" 2>/dev/null; then
+              # Initial installation only. PR code runs with read-only permissions.
+              test "$EVENT_NAME" = pull_request
+              test -z "$(git ls-tree "$TRUSTED_MAIN_SHA" -- scripts/release-policy.mjs)"
+              export INITIAL_INSTALL=true
+              git checkout --detach "$EXPECTED_SHA"
+            fi
             node scripts/release-automation.mjs ci
           else
             printf 'sha=%s\nbase=%s\n' "$EXPECTED_SHA" "$PUSH_BASE" >> "$GITHUB_OUTPUT"
