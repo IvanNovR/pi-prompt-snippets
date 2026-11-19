@@ -136,7 +136,12 @@ async def run(mode):
         assert 'GPT-Ivan' in plain.splitlines()[-1]
         assert '~/Projects/pi-prompt-snippets' in plain.splitlines()[-2]
     return {'requestSha256':hashlib.sha256(text.encode()).hexdigest(),'visibility':mode,'verifiedFullPrompt':True,'verifiedEmptyCompletion':True,'verifiedSelectedTemporaryIDs':['session-kickoff.md','orchestrator-mode.md','ask-questions.md'],'verifiedSendClipsNoMenuOrPreview':True,'verifiedNativeFooterAtBottom':True}
+def source_snapshot():
+    return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted((ROOT/'pi-extension/prompt-snippets').glob('*.ts'))}
 async def main():
+    sources = source_snapshot()
+    source_digest = hashlib.sha256(json.dumps(sources, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     OUT.mkdir(exist_ok=True)
     try:
         results=[await run(mode) for mode in ['visible','hidden']]
@@ -154,7 +159,7 @@ async def main():
         assert [f['name'] for f in chosen]==['07-widget','08-input','09-sent']
         gif(mode+'.gif',chosen)
     for name,source in [('menu','04-selection'),('preview','05-preview'),('widget','08-input')]: shutil.copyfile(OUT/'visible'/(source+'.png'),ROOT/'docs/assets'/(name+'.png'))
-    manifest={'mechanism':'Actual Pi CLI PTY; tmux VT emulation; ANSI styled cell export; Pillow rasterization; ffmpeg GIF encoding. Not desktop pixels.','sourceSha256':hashlib.sha256((ROOT/'index.ts').read_bytes()).hexdigest(),'piVersion':json.loads((ROOT/'node_modules/@earendil-works/pi-coding-agent/package.json').read_text())['version'],'grid':{'columns':COLS,'rows':ROWS,'cellPixels':[CW,CH]},'input':'Help me review this project.','snippets':['session-kickoff.md','orchestrator-mode.md','ask-questions.md'],'selection':'All temporary; two prepend, one append','provider':'capture-offline/GPT-Ivan: fixture name, empty completion; no network, model output, or real model cost','theme':{'name':'system','selection':'Clean unset Pi theme; no terminal OSC color replies; native ANSI fallback','terminalForeground':FG,'terminalBackground':BG,'terminalPalette':'xterm 16-color defaults in raster(); SGR2 half-intensity foreground composited against background'},'nativeAdaptations':{'header':'Actual built-in Pi header preserved; one muted npm attribution line appended to native header container','cwd':'Native footer first-line display-only replacement ~/Projects/IdeaProjects/pi-prompt-snippets -> ~/Projects/pi-prompt-snippets; actual cwd unchanged'},'versions':{'tmux':tmux_version,'pillow':Image.__version__,'node':subprocess.check_output(['node','--version'],text=True).strip(),'toolsFromChildPath':TOOL_VERSIONS,'ffmpeg':subprocess.check_output([os.environ.get('FFMPEG','/opt/homebrew/bin/ffmpeg'),'-version'],text=True).splitlines()[0]},'executableDiscovery':'Existing ~/.pi/agent/bin prepended to child PATH; no cache relocation','verification':results,'frames':frames}
+    manifest={'mechanism':'Actual Pi CLI PTY; tmux VT emulation; ANSI styled cell export; Pillow rasterization; ffmpeg GIF encoding. Not desktop pixels.','sourceSha256':source_digest,'sourceFilesSha256':sources,'piVersion':json.loads((ROOT/'node_modules/@earendil-works/pi-coding-agent/package.json').read_text())['version'],'grid':{'columns':COLS,'rows':ROWS,'cellPixels':[CW,CH]},'input':'Help me review this project.','snippets':['session-kickoff.md','orchestrator-mode.md','ask-questions.md'],'selection':'All temporary; two prepend, one append','provider':'capture-offline/GPT-Ivan: fixture name, empty completion; no network, model output, or real model cost','theme':{'name':'system','selection':'Clean unset Pi theme; no terminal OSC color replies; native ANSI fallback','terminalForeground':FG,'terminalBackground':BG,'terminalPalette':'xterm 16-color defaults in raster(); SGR2 half-intensity foreground composited against background'},'nativeAdaptations':{'header':'Actual built-in Pi header preserved; one muted npm attribution line appended to native header container','cwd':'Native footer first-line display-only replacement ~/Projects/IdeaProjects/pi-prompt-snippets -> ~/Projects/pi-prompt-snippets; actual cwd unchanged'},'versions':{'tmux':tmux_version,'pillow':Image.__version__,'node':subprocess.check_output(['node','--version'],text=True).strip(),'toolsFromChildPath':TOOL_VERSIONS,'ffmpeg':subprocess.check_output([os.environ.get('FFMPEG','/opt/homebrew/bin/ffmpeg'),'-version'],text=True).splitlines()[0]},'executableDiscovery':'Existing ~/.pi/agent/bin prepended to child PATH; no cache relocation','verification':results,'frames':frames}
     manifest['resolvedNativeTheme']=json.loads((OUT/'visible/native-theme.json').read_text())
     manifest['media']={}
     for name in ['demo.gif','menu.gif','visible.gif','hidden.gif']:
@@ -165,7 +170,7 @@ async def main():
             for i in range(image.n_frames): image.seek(i); delays.append(image.info['duration'])
             assert image.size==(COLS*CW,ROWS*CH)
         manifest['media'][name]={'ffprobe':probe,'delaysMilliseconds':delays,'sha256':hashlib.sha256(target.read_bytes()).hexdigest()}
-    assert manifest['sourceSha256']==hashlib.sha256(subprocess.check_output(['git','show','HEAD:index.ts'],cwd=ROOT)).hexdigest(), 'Application source must remain unchanged'
+    assert source_snapshot() == sources, 'Application source tree must remain unchanged during capture'
     (ROOT/'docs/assets/capture-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     sheet=Image.new('RGB',(1650,600),BG)
     representatives=[('visible','04-selection'),('visible','05-preview'),('visible','08-input'),('visible','09-sent'),('hidden','06-hidden-setting'),('hidden','09-sent')]

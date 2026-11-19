@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { stripVTControlCharacters } from 'node:util';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, cpSync, symlinkSync, rmSync, existsSync } from 'node:fs';
+import fs, { mkdtempSync, mkdirSync, readFileSync, writeFileSync, cpSync, symlinkSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import os, { tmpdir } from 'node:os';
 import { syncBuiltinESMExports } from 'node:module';
 import { join, resolve } from 'node:path';
@@ -10,49 +10,66 @@ import { queuedSession } from './runtime-helper.mjs';
 import { visibleWidth } from '@earendil-works/pi-tui';
 
 const root = resolve(import.meta.dirname, '..');
-const source = readFileSync(join(root, 'index.ts'), 'utf8');
 const user = (content = 'hello') => ({ role: 'user', content, timestamp: 123 });
 const entry = (message) => ({ type: 'message', message });
 
-async function fixture(t, { compiled = false, mode = 'tui', entries = [], reason = 'startup', defaults = false, visibility = 'visible' } = {}) {
+async function fixture(t, { compiled = false, mode = 'tui', entries = [], reason = 'startup', defaults = false, visibility = 'visible', home, prepare } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'pi-snippets-test-'));
   const oldHomedir = os.homedir;
-  const fixtureHome = join(dir, 'home');
+  const fixtureHome = home ?? join(dir, 'home');
   // Inject only the extension's filesystem location; do not relocate HOME,
   // XDG directories, npm configuration or caches for this test process.
-  os.homedir = () => fixtureHome;
-  syncBuiltinESMExports();
-  t.after(() => {
-    os.homedir = oldHomedir;
+  if (!home) {
+    os.homedir = () => fixtureHome;
     syncBuiltinESMExports();
+  }
+  t.after(() => {
+    if (!home) {
+      os.homedir = oldHomedir;
+      syncBuiltinESMExports();
+    }
     rmSync(dir, { recursive: true, force: true });
   });
   symlinkSync(join(root, 'node_modules'), join(dir, 'node_modules'), 'dir');
   const snippetsDir = join(fixtureHome, '.pi', 'agent', 'snippets');
   const configPath = join(fixtureHome, '.pi', 'agent', 'prompt-snippets-config.json');
+  const ledgerPath = join(fixtureHome, '.pi', 'agent', 'prompt-snippets-defaults-ledger.json');
   mkdirSync(snippetsDir, { recursive: true });
-  if (visibility) writeFileSync(configPath, JSON.stringify({ visibility }, null, 2), 'utf8');
+  if (visibility && !home) writeFileSync(configPath, JSON.stringify({ visibility }, null, 2), 'utf8');
   if (defaults) cpSync(join(root, 'snippets'), join(dir, 'snippets'), { recursive: true });
-  else {
+  else if (!home) {
     for (const [file, placement, persistent, body, order] of [
       ['a.md', 'prepend', true, 'PRE', 2],
       ['b.md', 'append', true, 'POST', 1],
       ['c.md', 'append', false, 'MANUAL', 3],
     ]) writeFileSync(join(snippetsDir, file), `---\nname: ${file}\nplacement: ${placement}\npersistent: ${persistent}\norder: ${order}\n---\n${body}`);
   }
-  const modulePath = compiled ? join(dir, 'dist', 'index.js') : join(dir, 'index.ts');
-  mkdirSync(join(dir, 'dist'), { recursive: true });
+  const modulePath = compiled ? join(dir, 'dist', 'pi-extension', 'prompt-snippets', 'index.js') : join(dir, 'pi-extension', 'prompt-snippets', 'index.ts');
+  mkdirSync(join(dir, 'dist', 'pi-extension', 'prompt-snippets'), { recursive: true });
   writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
   // Relocate the entry, not just its fixture data: module-level filesystem
   // constants must be initialized afresh, and bundled paths must be real.
-  writeFileSync(modulePath, compiled ? readFileSync(join(root, 'dist', 'index.js'), 'utf8') : source);
+  if (compiled) {
+    cpSync(join(root, 'dist', 'pi-extension', 'prompt-snippets'), join(dir, 'dist', 'pi-extension', 'prompt-snippets'), { recursive: true });
+  } else {
+    // Copy all source files
+    cpSync(join(root, 'pi-extension', 'prompt-snippets'), join(dir, 'pi-extension', 'prompt-snippets'), { recursive: true });
+  }
+  prepare?.({ dir, snippetsDir, ledgerPath });
   const jiti = createJiti(import.meta.url, { interopDefault: true, esmResolve: true });
   const piAgent = await import('@earendil-works/pi-coding-agent');
   piAgent.initTheme('dark', false);
+  const beforeImport = readdirSync(snippetsDir);
+  const hadLedger = existsSync(ledgerPath);
   const extension = (await jiti.import(modulePath)).default;
+  assert.deepEqual(readdirSync(snippetsDir), beforeImport, 'import must not seed files');
+  assert.equal(existsSync(ledgerPath), hadLedger, 'import must not write ledger');
   const handlers = new Map();
   let menuKeys = [];
   let widget;
+  let commandHandler;
+  let commandCompletions;
+  const notifications = [];
   // Initialize a theme compatible with pi-coding-agent's theme system
   const theme = {
     fg: (color, text) => text,
@@ -74,10 +91,14 @@ async function fixture(t, { compiled = false, mode = 'tui', entries = [], reason
     appearance: 'dark',
   };
   const ctx = {
-    mode, hasUI: mode === 'tui',
+    mode, hasUI: mode === 'tui' || mode === 'rpc',
     sessionManager: { getEntries: () => entries, getBranch: () => { throw new Error('must inspect all entries'); } },
     ui: {
-      theme, setWidget(_id, lines) { widget = lines; }, notify() {},
+      theme, setWidget(_id, lines) { widget = lines; }, notify(message, level) { notifications.push({ message, level }); },
+      async confirm(title, message) {
+        // Default to cancel in tests unless overridden
+        return false;
+      },
       async custom(factory) {
         let result;
         let closed = false;
@@ -95,12 +116,18 @@ async function fixture(t, { compiled = false, mode = 'tui', entries = [], reason
       },
     },
   };
-  let command;
-  extension({ on: (name, handler) => handlers.set(name, handler), registerShortcut() {}, registerCommand: (_, options) => { command = options.handler; } });
+  extension({
+    on: (name, handler) => handlers.set(name, handler),
+    registerShortcut() {},
+    registerCommand: (_, options) => {
+      commandHandler = options.handler;
+      commandCompletions = options.getArgumentCompletions;
+    }
+  });
   const emit = (name, event) => handlers.get(name)?.(event, ctx);
   await emit('session_start', { reason });
   return {
-    dir, snippetsDir, configPath, entries, emit, extension,
+    dir, home: fixtureHome, snippetsDir, configPath, ledgerPath, entries, emit, extension, notifications,
     get widget() { return widget; },
     menuUI(keys) { menuKeys = keys; return ctx.ui; },
     input: async (text = 'hello', source = 'interactive', images) => await emit('input', { text, source, images }),
@@ -109,7 +136,14 @@ async function fixture(t, { compiled = false, mode = 'tui', entries = [], reason
       entries.push(entry(result?.message ?? message));
       return result;
     },
-    async menu(keys) { menuKeys = keys; await command('', ctx); },
+    async menu(keys) { menuKeys = keys; await commandHandler('', ctx); },
+    async command(args, uiOverrides = {}) {
+      const testCtx = { ...ctx, ui: { ...ctx.ui, ...uiOverrides } };
+      await commandHandler(args, testCtx);
+    },
+    getCompletions(prefix) {
+      return commandCompletions ? commandCompletions(prefix) : null;
+    },
   };
 }
 
@@ -126,6 +160,7 @@ for (const compiled of [false, true]) {
     assert.equal(await f.input('second'), undefined);
     assert.equal(await f.record(user('second')), undefined);
   });
+
   test(`${compiled ? 'compiled' : 'source'}: automatic transform via input (visible mode, default)`, async (t) => {
     const f = await fixture(t, { compiled, visibility: 'visible' });
     const inputResult = await f.input();
@@ -136,12 +171,313 @@ for (const compiled of [false, true]) {
     assert.equal(recordResult, undefined, 'visible mode does not transform at message_end');
     assert.equal(await f.input('second'), undefined, 'second input has no automatic selection');
   });
+
   test(`${compiled ? 'compiled' : 'source'}: bundled snippets resolve from package root`, async (t) => {
     const f = await fixture(t, { compiled, defaults: true });
     assert.ok(existsSync(join(f.snippetsDir, 'session-kickoff.md')));
   });
+
+  test(`${compiled ? 'compiled' : 'source'}: first launch seeds all bundled defaults`, async (t) => {
+    const f = await fixture(t, { compiled, defaults: true });
+    const ledger = JSON.parse(readFileSync(f.ledgerPath, 'utf8'));
+    assert.ok(ledger.seen.includes('session-kickoff.md'));
+    assert.ok(ledger.seen.includes('ask-questions.md'));
+    assert.equal(ledger.seen.length, 6);
+  });
+
+  test(`${compiled ? 'compiled' : 'source'}: deleted bundled default not restored on subsequent session`, async (t) => {
+    const f = await fixture(t, { compiled, defaults: true });
+    // Delete a bundled default
+    rmSync(join(f.snippetsDir, 'session-kickoff.md'));
+
+    // Start a fresh module in another installation sharing the same home/ledger.
+    const f2 = await fixture(t, { compiled, defaults: true, home: f.home });
+
+    // The deleted file should NOT be restored automatically
+    assert.equal(existsSync(join(f2.snippetsDir, 'session-kickoff.md')), false);
+
+    // Ledger still tracks it as seen
+    const ledger = JSON.parse(readFileSync(f2.ledgerPath, 'utf8'));
+    assert.ok(ledger.seen.includes('session-kickoff.md'));
+  });
+
+  test(`${compiled ? 'compiled' : 'source'}: new bundled default added in update is seeded`, async (t) => {
+    const f = await fixture(t, { compiled, defaults: false });
+
+    // Simulate initial state: only a.md, b.md, c.md
+    const initialLedger = { seen: ['a.md', 'b.md', 'c.md'] };
+    writeFileSync(f.ledgerPath, JSON.stringify(initialLedger, null, 2));
+
+    // Now start with defaults=true (simulating package update with new bundled snippets)
+    const f2 = await fixture(t, { compiled, defaults: true, home: f.home });
+
+    // New bundled defaults should be seeded
+    assert.ok(existsSync(join(f2.snippetsDir, 'session-kickoff.md')));
+
+    // Ledger should include the new ones
+    const ledger = JSON.parse(readFileSync(f2.ledgerPath, 'utf8'));
+    assert.ok(ledger.seen.includes('session-kickoff.md'));
+  });
+
+  test(`${compiled ? 'compiled' : 'source'}: collision with user's existing file preserves user file`, async (t) => {
+    const f = await fixture(t, { compiled, defaults: false });
+
+    // User creates their own session-kickoff.md
+    const userContent = '---\nname: My Custom\n---\nUser custom content';
+    writeFileSync(join(f.snippetsDir, 'session-kickoff.md'), userContent);
+
+    // Mark it as not seen yet in ledger
+    const initialLedger = { seen: [] };
+    writeFileSync(f.ledgerPath, JSON.stringify(initialLedger, null, 2));
+
+    // Start with defaults=true
+    const f2 = await fixture(t, { compiled, defaults: true, home: f.home });
+
+    // User's file should be preserved
+    const content = readFileSync(join(f2.snippetsDir, 'session-kickoff.md'), 'utf8');
+    assert.equal(content, userContent);
+
+    // Ledger should mark it as seen (to not try again)
+    const ledger = JSON.parse(readFileSync(f2.ledgerPath, 'utf8'));
+    assert.ok(ledger.seen.includes('session-kickoff.md'));
+  });
+
+  test(`${compiled ? 'compiled' : 'source'}: restore with confirmation (cancel)`, async (t) => {
+    const f = await fixture(t, { compiled, defaults: true });
+
+    // User deletes a file
+    rmSync(join(f.snippetsDir, 'session-kickoff.md'));
+
+    // Restore without --yes, user cancels
+    let notifyMsg = '';
+    await f.command('restore', {
+      confirm: async () => false,
+      notify: (msg) => { notifyMsg = msg; },
+    });
+
+    // File should NOT be restored
+    assert.equal(existsSync(join(f.snippetsDir, 'session-kickoff.md')), false);
+    assert.equal(notifyMsg, ''); // No success message
+  });
+
+  test(`${compiled ? 'compiled' : 'source'}: restore with confirmation (accept)`, async (t) => {
+    const f = await fixture(t, { compiled, defaults: true });
+
+    // User modifies a bundled file
+    writeFileSync(join(f.snippetsDir, 'session-kickoff.md'), '---\nname: Modified\n---\nModified content');
+    const originalContent = readFileSync(join(root, 'snippets', 'session-kickoff.md'), 'utf8');
+
+    // Restore without --yes, user accepts
+    let notifyMsg = '';
+    await f.command('restore', {
+      confirm: async () => true,
+      notify: (msg, level) => { notifyMsg = msg; },
+    });
+
+    // File should be restored to original
+    const content = readFileSync(join(f.snippetsDir, 'session-kickoff.md'), 'utf8');
+    assert.equal(content, originalContent);
+    assert.match(notifyMsg, /Restored \d+ default snippets/);
+  });
+
+  test(`${compiled ? 'compiled' : 'source'}: restore with --yes flag bypasses confirmation`, async (t) => {
+    const f = await fixture(t, { compiled, defaults: true });
+
+    rmSync(join(f.snippetsDir, 'session-kickoff.md'));
+
+    let confirmCalled = false;
+    let notifyMsg = '';
+    await f.command('restore --yes', {
+      confirm: async () => { confirmCalled = true; return false; },
+      notify: (msg) => { notifyMsg = msg; },
+    });
+
+    // Confirmation should NOT be called
+    assert.equal(confirmCalled, false);
+
+    // File should be restored
+    assert.ok(existsSync(join(f.snippetsDir, 'session-kickoff.md')));
+    assert.match(notifyMsg, /Restored \d+ default snippets/);
+  });
+
+  test(`${compiled ? 'compiled' : 'source'}: restore in non-interactive mode requires --yes`, async (t) => {
+    const f = await fixture(t, { compiled, defaults: true, mode: 'print' });
+
+    let notifyMsg = '';
+    let notifyLevel = '';
+    await f.command('restore', {
+      notify: (msg, level) => { notifyMsg = msg; notifyLevel = level; },
+    });
+
+    assert.match(notifyMsg, /requires --yes flag/);
+    assert.equal(notifyLevel, 'error');
+  });
+
+  test(`${compiled ? 'compiled' : 'source'}: restore preserves custom snippets and renamed copies`, async (t) => {
+    const f = await fixture(t, { compiled, defaults: true });
+
+    // User creates custom snippet
+    const customContent = '---\nname: Custom\n---\nMy custom snippet';
+    writeFileSync(join(f.snippetsDir, 'my-custom.md'), customContent);
+
+    // User renames a bundled default
+    const renamedContent = readFileSync(join(f.snippetsDir, 'session-kickoff.md'), 'utf8');
+    writeFileSync(join(f.snippetsDir, 'my-kickoff-copy.md'), renamedContent);
+
+    // Restore with --yes
+    await f.command('restore --yes', {
+      notify: () => {},
+    });
+
+    // Custom and renamed files should be preserved
+    assert.equal(readFileSync(join(f.snippetsDir, 'my-custom.md'), 'utf8'), customContent);
+    assert.equal(readFileSync(join(f.snippetsDir, 'my-kickoff-copy.md'), 'utf8'), renamedContent);
+
+    // Original bundled file should exist
+    assert.ok(existsSync(join(f.snippetsDir, 'session-kickoff.md')));
+  });
+
+  test(`${compiled ? 'compiled' : 'source'}: restore preserves current selection and mode`, async (t) => {
+    const f = await fixture(t, { compiled, defaults: true });
+
+    // Manually enable a snippet
+    await f.menu([' ', ' ', '\u001b']); // a.md persistent -> off -> temporary
+    assert.ok(f.widget); // Should have active widget
+
+    // Restore
+    await f.command('restore --yes', {
+      notify: () => {},
+    });
+
+    // Widget should still show the temporary selection
+    assert.ok(f.widget);
+  });
+
+  test(`${compiled ? 'compiled' : 'source'}: restore does not autoactivate newly restored snippets`, async (t) => {
+    const f = await fixture(t, { compiled, defaults: true });
+
+    // Start with no automatic eligibility (already recorded)
+    await f.record(user('initial'));
+
+    // Delete all bundled snippets
+    rmSync(join(f.snippetsDir, 'session-kickoff.md'));
+    rmSync(join(f.snippetsDir, 'ask-questions.md'));
+
+    // Restore
+    await f.command('restore --yes', {
+      notify: () => {},
+    });
+
+    // No snippets should be auto-activated
+    assert.equal(await f.input('test'), undefined);
+  });
+
+  test(`${compiled ? 'compiled' : 'source'}: restore unknown argument shows error`, async (t) => {
+    const f = await fixture(t, { compiled, defaults: true });
+
+    let notifyMsg = '';
+    let notifyLevel = '';
+    await f.command('restore --unknown --yes', {
+      notify: (msg, level) => { notifyMsg = msg; notifyLevel = level; },
+    });
+
+    assert.match(notifyMsg, /Unknown arguments:.*--unknown/);
+    assert.equal(notifyLevel, 'error');
+  });
+
+  test(`${compiled ? 'compiled' : 'source'}: settings alias opens the default menu`, async (t) => {
+    const f = await fixture(t, { compiled });
+    const notificationsBefore = [...f.notifications];
+    let defaultRows;
+    await f.menu([(rows) => { defaultRows = rows; }, '\u001b']);
+    let opened = 0;
+    await f.command('  settings  ', f.menuUI([(rows) => {
+      opened++;
+      assert.deepEqual(rows, defaultRows);
+    }, '\u001b']));
+    assert.equal(opened, 1);
+    assert.deepEqual(f.notifications, notificationsBefore);
+  });
+
+  test(`${compiled ? 'compiled' : 'source'}: settings rejects extra arguments without restoring files`, async (t) => {
+    const f = await fixture(t, { compiled, defaults: true });
+    const file = join(f.snippetsDir, 'session-kickoff.md');
+    writeFileSync(file, 'CUSTOM');
+    const ledger = readFileSync(f.ledgerPath, 'utf8');
+    for (const args of ['settings --yes', 'settings restore', 'settings extra', 'setting', 'unknown --yes']) {
+      await f.command(args, { custom: async () => assert.fail('invalid command must not open menu'), confirm: async () => assert.fail('invalid command must not confirm restore') });
+      assert.equal(f.notifications.at(-1).level, 'error');
+      assert.equal(readFileSync(file, 'utf8'), 'CUSTOM');
+      assert.equal(readFileSync(f.ledgerPath, 'utf8'), ledger);
+    }
+  });
+
+  test(`${compiled ? 'compiled' : 'source'}: command completion offers settings and restore`, async (t) => {
+    const f = await fixture(t, { compiled });
+
+    const completions = f.getCompletions('');
+    assert.ok(completions);
+    assert.deepEqual(completions.map(({ value }) => value), ['settings', 'restore']);
+    assert.deepEqual(f.getCompletions('set').map(({ value }) => value), ['settings']);
+    assert.deepEqual(f.getCompletions('settings').map(({ value }) => value), ['settings']);
+
+    const partialCompletions = f.getCompletions('res');
+    assert.ok(partialCompletions);
+    assert.equal(partialCompletions[0].value, 'restore');
+  });
+
+  test(`${compiled ? 'compiled' : 'source'}: command completion offers --yes after restore`, async (t) => {
+    const f = await fixture(t, { compiled });
+
+    const completions = f.getCompletions('restore ');
+    assert.ok(completions);
+    assert.equal(completions.length, 1);
+    assert.equal(completions[0].value, 'restore --yes');
+
+    const completionsWithSpace = f.getCompletions('restore ');
+    assert.ok(completionsWithSpace);
+    assert.equal(completionsWithSpace[0].value, 'restore --yes');
+
+    const partialCompletions = f.getCompletions('restore --y');
+    assert.ok(partialCompletions);
+    assert.equal(partialCompletions[0].value, 'restore --yes');
+  });
+
+  test(`${compiled ? 'compiled' : 'source'}: command completion handles whitespace and partial tokens`, async (t) => {
+    const f = await fixture(t, { compiled });
+
+    // Empty string
+    const empty = f.getCompletions('');
+    assert.ok(empty && empty.length > 0);
+
+    // Multiple spaces
+    const spaces = f.getCompletions('   ');
+    assert.ok(spaces && spaces.length > 0);
+
+    // Partial with spaces
+    const partial = f.getCompletions('  res');
+    assert.ok(partial && partial.length > 0);
+
+    // After restore with trailing spaces
+    const afterRestore = f.getCompletions('restore   ');
+    assert.ok(afterRestore && afterRestore.length > 0);
+  });
+
+  test(`${compiled ? 'compiled' : 'source'}: unknown command shows error`, async (t) => {
+    const f = await fixture(t, { compiled });
+
+    let notifyMsg = '';
+    let notifyLevel = '';
+    await f.command('unknown', {
+      notify: (msg, level) => { notifyMsg = msg; notifyLevel = level; },
+    });
+
+    assert.match(notifyMsg, /Unknown command: unknown/);
+    assert.equal(notifyLevel, 'error');
+  });
 }
 
+// Continue with existing tests for behavior preservation
 for (const compiled of [false, true]) {
   for (const visibility of ['visible', 'hidden']) {
     const label = `${compiled ? 'compiled' : 'source'} ${visibility}`;
@@ -221,6 +557,7 @@ for (const compiled of [false, true]) {
   }
 }
 
+// Continue with more existing behavior tests...
 for (const reason of ['startup', 'new', 'resume', 'reload', 'fork']) {
   test(`${reason}: empty session eligible, retained user history ineligible (hidden mode)`, async (t) => {
     const f = await fixture(t, { reason, entries: [entry({ role: 'system', content: '' }), { type: 'custom', data: 'metadata' }], visibility: 'hidden' });
@@ -647,10 +984,234 @@ test('real AgentSession: later handled input does not consume automatic eligibil
   assert.equal(starts[0].content[0].text, 'PRE\n\naccepted\n\nPOST');
 });
 
+for (const compiled of [false, true]) {
+  const label = compiled ? 'compiled' : 'source';
+  const snapshot = (f) => Object.fromEntries(readdirSync(f.snippetsDir).filter((name) => name.endsWith('.md')).map((name) => [name, readFileSync(join(f.snippetsDir, name), 'utf8')]));
+
+  test(`${label}: actual bundle update adds only unseen names and remembers collisions`, async (t) => {
+    const f = await fixture(t, { compiled, defaults: true });
+    const custom = '---\nname: customized\n---\nCUSTOM';
+    writeFileSync(join(f.snippetsDir, 'session-kickoff.md'), custom);
+    rmSync(join(f.snippetsDir, 'ask-questions.md'));
+    writeFileSync(join(f.dir, 'snippets', 'new-default.md'), '---\nname: new\n---\nNEW');
+    writeFileSync(join(f.dir, 'snippets', 'collision.md'), '---\nname: shipped\n---\nSHIPPED');
+    writeFileSync(join(f.snippetsDir, 'collision.md'), custom);
+    await f.emit('session_start', { reason: 'reload' });
+    assert.match(readFileSync(join(f.snippetsDir, 'new-default.md'), 'utf8'), /NEW/);
+    assert.equal(readFileSync(join(f.snippetsDir, 'collision.md'), 'utf8'), custom);
+    assert.equal(readFileSync(join(f.snippetsDir, 'session-kickoff.md'), 'utf8'), custom);
+    assert.equal(existsSync(join(f.snippetsDir, 'ask-questions.md')), false);
+    rmSync(join(f.snippetsDir, 'collision.md'));
+    await f.emit('session_start', { reason: 'new' });
+    assert.equal(existsSync(join(f.snippetsDir, 'collision.md')), false);
+    assert.ok(JSON.parse(readFileSync(f.ledgerPath)).seen.includes('collision.md'));
+  });
+
+  test(`${label}: corrupt ledger rebuild is reported and missing defaults recover without overwrite`, async (t) => {
+    const f = await fixture(t, { compiled, defaults: true });
+    const original = '---\npersistent: true\n---\nCUSTOM';
+    writeFileSync(join(f.snippetsDir, 'session-kickoff.md'), original);
+    rmSync(join(f.snippetsDir, 'ask-questions.md'));
+    writeFileSync(f.ledgerPath, '{broken');
+    await f.emit('session_start', { reason: 'reload' });
+    assert.ok(existsSync(join(f.snippetsDir, 'ask-questions.md')));
+    assert.equal(readFileSync(join(f.snippetsDir, 'session-kickoff.md'), 'utf8'), original);
+    assert.ok(f.notifications.some(({ message }) => /rebuilding as a first launch/.test(message)));
+    assert.equal(JSON.parse(readFileSync(f.ledgerPath)).seen.length, 6);
+  });
+
+  test(`${label}: unreadable existing ledger recovers with warning when persistence is available`, async (t) => {
+    const originalRead = fs.readFileSync;
+    let f;
+    try {
+      f = await fixture(t, { compiled, defaults: true, prepare({ ledgerPath }) {
+        writeFileSync(ledgerPath, JSON.stringify({ seen: ['session-kickoff.md'] }));
+        fs.readFileSync = (path, ...args) => {
+          if (path === ledgerPath) throw new Error('simulated unreadable ledger');
+          return originalRead(path, ...args);
+        };
+        syncBuiltinESMExports();
+      } });
+    } finally {
+      fs.readFileSync = originalRead;
+      syncBuiltinESMExports();
+    }
+    assert.ok(f.notifications.some(({ message }) => /rebuilding as a first launch.*unreadable ledger/.test(message)));
+    assert.ok(existsSync(join(f.snippetsDir, 'session-kickoff.md')));
+    assert.equal(JSON.parse(readFileSync(f.ledgerPath)).seen.length, 6);
+  });
+
+  test(`${label}: automatic copy failures stay pending and retry in fresh module`, async (t) => {
+    const originalCopy = fs.copyFileSync;
+    let f;
+    try {
+      f = await fixture(t, { compiled, defaults: true, prepare() {
+        fs.copyFileSync = (source, target, flags) => {
+          if (target.endsWith('session-kickoff.md')) throw new Error('simulated copy failure');
+          return originalCopy(source, target, flags);
+        };
+        syncBuiltinESMExports();
+      } });
+    } finally {
+      fs.copyFileSync = originalCopy;
+      syncBuiltinESMExports();
+    }
+    const ledger = JSON.parse(readFileSync(f.ledgerPath));
+    assert.ok(!ledger.seen.includes('session-kickoff.md'));
+    assert.ok(ledger.pending.includes('session-kickoff.md'));
+    assert.ok(f.notifications.some(({ message }) => /will retry.*session-kickoff.md/.test(message)));
+    const next = await fixture(t, { compiled, defaults: true, home: f.home });
+    assert.ok(existsSync(join(next.snippetsDir, 'session-kickoff.md')));
+    assert.ok(JSON.parse(readFileSync(next.ledgerPath)).seen.includes('session-kickoff.md'));
+    rmSync(join(next.snippetsDir, 'session-kickoff.md'));
+    await next.emit('session_start', { reason: 'reload' });
+    assert.equal(existsSync(join(next.snippetsDir, 'session-kickoff.md')), false);
+  });
+
+  test(`${label}: failed ledger persistence prevents seed mutation but existing snippets work`, async (t) => {
+    const f = await fixture(t, { compiled, defaults: true, prepare({ snippetsDir, ledgerPath }) {
+      writeFileSync(join(snippetsDir, 'custom.md'), '---\npersistent: true\n---\nEXISTING');
+      mkdirSync(ledgerPath); // unreadable ledger and cannot atomically replace a directory
+    } });
+    assert.deepEqual(readdirSync(f.snippetsDir), ['custom.md']);
+    assert.ok(f.notifications.some(({ message }) => /Could not seed default snippets/.test(message)));
+    assert.equal((await f.input()).text, 'hello\n\nEXISTING');
+  });
+
+  for (const mode of ['print', 'json']) {
+    test(`${label} ${mode}: plain restore refuses; --yes restores without UI`, async (t) => {
+      const f = await fixture(t, { compiled, defaults: true, mode });
+      rmSync(join(f.snippetsDir, 'session-kickoff.md'));
+      const before = snapshot(f);
+      const ledger = readFileSync(f.ledgerPath, 'utf8');
+      const overrides = { confirm: () => assert.fail('no UI must not prompt') };
+      await f.command('restore', overrides);
+      assert.deepEqual(snapshot(f), before);
+      assert.equal(readFileSync(f.ledgerPath, 'utf8'), ledger);
+      await f.command('restore --yes', overrides);
+      assert.ok(existsSync(join(f.snippetsDir, 'session-kickoff.md')));
+    });
+  }
+
+  test(`${label}: RPC confirmation, cancel and unknown args are non-destructive`, async (t) => {
+    const f = await fixture(t, { compiled, defaults: true, mode: 'rpc' });
+    writeFileSync(join(f.snippetsDir, 'session-kickoff.md'), 'CUSTOM EDIT');
+    rmSync(join(f.snippetsDir, 'ask-questions.md'));
+    const before = snapshot(f);
+    const ledger = readFileSync(f.ledgerPath, 'utf8');
+    const config = readFileSync(f.configPath, 'utf8');
+    let asked = 0;
+    await f.command('restore', { confirm: async (_title, text) => { asked++; assert.match(text, /overwrite custom edits/); return false; } });
+    assert.equal(asked, 1);
+    for (const args of ['restore --bogus --yes', 'restor --yes', '--yes']) await f.command(args);
+    assert.deepEqual(snapshot(f), before);
+    assert.equal(readFileSync(f.ledgerPath, 'utf8'), ledger);
+    assert.equal(readFileSync(f.configPath, 'utf8'), config);
+    await f.command('restore', { confirm: async () => true });
+    assert.match(readFileSync(join(f.snippetsDir, 'session-kickoff.md'), 'utf8'), /name: Session kickoff/);
+  });
+
+  for (const visibility of ['visible', 'hidden']) {
+    test(`${label} ${visibility}: restore retains saved modes and runtime one-shots, not consumed or missing activation`, async (t) => {
+      const f = await fixture(t, { compiled, defaults: true, visibility });
+      // Turn the first default persistent, consume it, then restore its edited body.
+      await f.menu([' ', ' ', '\u001b']);
+      assert.match(readFileSync(join(f.snippetsDir, 'session-kickoff.md'), 'utf8'), /persistent: true/);
+      const initialInput = await f.input('already sent');
+      const sent = user(initialInput?.text ?? 'already sent');
+      await f.record(sent);
+      const oldEntries = structuredClone(f.entries);
+      await f.command('restore --yes');
+      assert.match(readFileSync(join(f.snippetsDir, 'session-kickoff.md'), 'utf8'), /persistent: true/);
+      assert.equal(f.widget, undefined);
+      assert.equal(await f.input('not rearmed'), undefined);
+      // Add an existing temporary selection; changing its body must not clear it.
+      await f.menu([' ', ' ', '\u001b']);
+      const priorWidget = f.widget;
+      rmSync(join(f.snippetsDir, 'ask-questions.md'));
+      await f.command('restore --yes');
+      assert.deepEqual(f.widget, priorWidget);
+      assert.doesNotMatch(readFileSync(join(f.snippetsDir, 'session-kickoff.md'), 'utf8'), /persistent: true/);
+      assert.deepEqual(f.entries, oldEntries, 'restore must never rewrite sent messages');
+      const input = await f.input('selected');
+      const recorded = await f.record(user(input?.text ?? 'selected'));
+      const text = recorded?.message.content ?? input?.text;
+      const shippedBody = readFileSync(join(root, 'snippets', 'session-kickoff.md'), 'utf8').split(/\r?\n---\r?\n/)[1].trim();
+      assert.equal(text, `${shippedBody}\n\nselected`, 'only the existing temporary selection applies');
+      assert.equal(f.widget, undefined);
+      assert.equal(await f.input('after'), undefined);
+      assert.equal(await f.record(user('after')), undefined);
+    });
+  }
+
+  for (const visibility of ['visible', 'hidden']) {
+    test(`${label} ${visibility}: missing automatic default is not reactivated by restore in unused session`, async (t) => {
+      const f = await fixture(t, { compiled, defaults: true, visibility, prepare({ snippetsDir }) {
+        writeFileSync(join(snippetsDir, 'session-kickoff.md'), '---\nplacement: prepend\npersistent: true\n---\nAUTO BEFORE DELETION');
+        writeFileSync(join(snippetsDir, 'ask-questions.md'), '---\npersistent: true\n---\nEXISTING AUTO');
+      } });
+      assert.ok(f.widget.some((line) => line.includes('session-kickoff')));
+      rmSync(join(f.snippetsDir, 'session-kickoff.md'));
+      await f.command('restore --yes');
+      assert.ok(existsSync(join(f.snippetsDir, 'session-kickoff.md')));
+      assert.ok(f.widget.every((line) => !line.includes('Session kickoff')));
+      const input = await f.input('first message');
+      const recorded = await f.record(user(input?.text ?? 'first message'));
+      const body = readFileSync(join(root, 'snippets', 'ask-questions.md'), 'utf8').split(/\r?\n---\r?\n/)[1].trim();
+      assert.equal(recorded?.message.content ?? input?.text, `first message\n\n${body}`, 'only the existing valid automatic selection is retained');
+    });
+  }
+
+  test(`${label}: restore preserves saved mode even if custom body was emptied`, async (t) => {
+    const f = await fixture(t, { compiled, defaults: true });
+    writeFileSync(join(f.snippetsDir, 'session-kickoff.md'), '---\npersistent: true\n---\n');
+    await f.command('restore --yes');
+    assert.match(readFileSync(join(f.snippetsDir, 'session-kickoff.md'), 'utf8'), /persistent: true/);
+  });
+
+  test(`${label}: partial restore reports file error, keeps successes and reloads actual content`, async (t) => {
+    const f = await fixture(t, { compiled, defaults: true });
+    rmSync(join(f.snippetsDir, 'session-kickoff.md'));
+    mkdirSync(join(f.snippetsDir, 'session-kickoff.md'));
+    writeFileSync(join(f.snippetsDir, 'ask-questions.md'), '---\nname: EDITED\n---\nEDITED BODY');
+    writeFileSync(join(f.snippetsDir, 'old-bundle.md'), 'OLD FILE');
+    let notification;
+    await f.command('restore --yes', { notify: (message, level) => { notification = { message, level }; } });
+    assert.equal(notification.level, 'warning');
+    assert.match(notification.message, /Restored 5 snippets, 1 failed: session-kickoff.md:/);
+    assert.match(readFileSync(join(f.snippetsDir, 'ask-questions.md'), 'utf8'), /name: Ask questions/);
+    assert.equal(readFileSync(join(f.snippetsDir, 'old-bundle.md'), 'utf8'), 'OLD FILE');
+    await f.menu([(rows) => { assert.ok(rows.join('\n').includes('Ask questions')); assert.ok(!rows.join('\n').includes('EDITED')); }, '\u001b']);
+  });
+
+  test(`${label}: native completion replaces full argument text and rejects unrelated tokens`, async (t) => {
+    const f = await fixture(t, { compiled });
+    const { CombinedAutocompleteProvider } = await import('@earendil-works/pi-tui');
+    const provider = new CombinedAutocompleteProvider([{ name: 'snippets', getArgumentCompletions: f.getCompletions }], root);
+    for (const [line, expectedValues] of [
+      ['/snippets ', ['settings', 'restore']],
+      ['/snippets set', ['settings']],
+      ['/snippets settings', ['settings']],
+      ['/snippets res', ['restore']],
+      ['/snippets restore ', ['restore --yes']],
+      ['/snippets restore --y', ['restore --yes']],
+      ['/snippets restore   --y', ['restore --yes']],
+    ]) {
+      const suggestions = await provider.getSuggestions([line], 0, line.length, {});
+      assert.deepEqual(suggestions.items.map(({ value }) => value), expectedValues);
+      for (const item of suggestions.items) {
+        const applied = provider.applyCompletion([line], 0, line.length, item, suggestions.prefix);
+        assert.equal(applied.lines[0].trimEnd(), `/snippets ${item.value}`);
+      }
+    }
+    for (const value of ['settings ', 'settings --yes', 'settingx', 'restorex ', 'restore --no', 'restore --yes extra', 'res ']) assert.equal(f.getCompletions(value), null);
+  });
+}
+
 test('package manifest exposes a shipped source entry and declares replacement API minimum', () => {
   const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-  assert.deepEqual(pkg.pi.extensions, ['./index.ts']);
-  assert.ok(pkg.files.includes('index.ts'));
+  assert.deepEqual(pkg.pi.extensions, ['./pi-extension/prompt-snippets/index.ts']);
+  assert.ok(pkg.files.includes('pi-extension'));
   assert.ok(pkg.files.includes('snippets'));
   assert.equal(pkg.peerDependencies['@earendil-works/pi-coding-agent'], '>=1.5.0');
 });
