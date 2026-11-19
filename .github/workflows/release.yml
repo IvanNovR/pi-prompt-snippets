@@ -1,138 +1,93 @@
 name: Release
 
-# Both automatic and manual runs remain gated by repository readiness variables.
 on:
-  push:
-    branches: [main]
+  pull_request:
+    types: [closed]
   workflow_dispatch:
     inputs:
       operation:
-        description: 'release: update PR or create merged release; retry: publish an existing release'
+        description: 'Recover an existing release only'
         required: true
         type: choice
-        options: [release, retry]
+        options: [retry]
       tag:
-        description: 'Existing vX.Y.Z GitHub release tag (retry only)'
+        description: 'Existing stable vX.Y.Z release'
+        required: true
         type: string
 
 permissions: {}
-
 concurrency:
-  group: release-main
+  group: release-cycle
   cancel-in-progress: false
 
 jobs:
-  release:
-    if: ${{ github.ref == 'refs/heads/main' && vars.RELEASE_AUTOMATION_READY == 'true' && (github.event_name == 'push' || inputs.operation == 'release') }}
+  target:
+    if: ${{ github.ref == 'refs/heads/main' && vars.RELEASE_AUTOMATION_READY == 'true' && (github.event_name == 'workflow_dispatch' || (github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main')) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
-      issues: write
-      pull-requests: write
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
-      prs: ${{ steps.release.outputs.prs }}
-    steps:
-      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
-        id: release
-        with:
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
-
-  release-pr-ci:
-    needs: release
-    if: ${{ needs.release.outputs.prs != '' }}
-    runs-on: ubuntu-24.04
-    permissions:
-      actions: write
-      contents: read
       pull-requests: read
-    steps:
-      - name: Dispatch read-only CI for each exact release PR head
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          PRS: ${{ needs.release.outputs.prs }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          for number in $(jq -r '.[].number' <<< "$PRS"); do
-            [[ "$number" =~ ^[0-9]+$ ]]
-            pr=$(gh api "repos/$REPOSITORY/pulls/$number")
-            jq -e --arg repo "$REPOSITORY" '.state == "open" and .base.ref == "main" and .head.repo.full_name == $repo and .user.login == "github-actions[bot]"' <<< "$pr" > /dev/null
-            branch=$(jq -r '.head.ref' <<< "$pr")
-            sha=$(jq -r '.head.sha' <<< "$pr")
-            gh workflow run ci.yml --repo "$REPOSITORY" --ref "$branch" -f pr_number="$number" -f expected_sha="$sha"
-          done
-
-  target:
-    needs: release
-    if: ${{ always() && github.ref == 'refs/heads/main' && vars.RELEASE_AUTOMATION_READY == 'true' && vars.PUBLICATION_READY == 'true' && (needs.release.outputs.release_created == 'true' || inputs.operation == 'retry') }}
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
     outputs:
       tag: ${{ steps.target.outputs.tag }}
+      sha: ${{ steps.target.outputs.sha }}
     steps:
-      - name: Validate existing non-draft release
-        id: target
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - id: target
         env:
           GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          TAG: ${{ inputs.operation == 'retry' && inputs.tag || needs.release.outputs.tag_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Expected stable vX.Y.Z tag'; exit 1; }
-          gh api "repos/$REPOSITORY/releases/tags/$TAG" > release.json
-          node -e '
-            const r = require("./release.json");
-            if (r.tag_name !== process.env.TAG || r.draft || r.prerelease) throw new Error("Expected an existing stable public release");
-          '
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          OPERATION: ${{ inputs.operation }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node scripts/release-automation.mjs finalize
 
   publish:
     needs: target
-    # Retry deliberately skips release; override transitive skipped-job propagation.
-    if: ${{ always() && needs.target.result == 'success' }}
+    if: ${{ needs.target.result == 'success' && vars.PUBLICATION_READY == 'true' }}
     runs-on: ubuntu-24.04
     environment: publication
     permissions:
       contents: read
+      pull-requests: read
       id-token: write
       packages: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: refs/tags/${{ needs.target.outputs.tag }}
+          ref: main
           fetch-depth: 0
           persist-credentials: false
-      - name: Require the release tag to belong to reviewed main history
-        env:
-          RELEASE_TAG: ${{ needs.target.outputs.tag }}
-        run: |
-          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
-          git merge-base --is-ancestor HEAD refs/remotes/origin/main
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24.21.0'
           package-manager-cache: false
-      - run: npm install --global npm@11.19.0
-      - name: Validate tagged package and lock versions
+      - name: Revalidate exact promotion identity after environment approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPERATION: retry
+          RELEASE_TAG: ${{ needs.target.outputs.tag }}
+        run: node scripts/release-automation.mjs finalize
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.target.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact tag checkout
         env:
           RELEASE_TAG: ${{ needs.target.outputs.tag }}
+          RELEASE_SHA: ${{ needs.target.outputs.sha }}
         run: |
-          node --input-type=module -e '
-            import fs from "node:fs";
-            import assert from "node:assert/strict";
-            const p = JSON.parse(fs.readFileSync("package.json"));
-            const l = JSON.parse(fs.readFileSync("package-lock.json"));
-            assert.equal(p.name, "@ivannovr/pi-prompt-snippets");
-            assert.equal(`v${p.version}`, process.env.RELEASE_TAG);
-            assert.equal(l.version, p.version);
-            assert.equal(l.packages[""].version, p.version);
-          '
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$RELEASE_SHA"
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main
+      - run: npm install --global npm@11.19.0
       - run: npm ci
       - run: npm test
       - run: npm run check:package
@@ -141,16 +96,42 @@ jobs:
           mkdir -p "$RUNNER_TEMP/publish"
           npm pack --json --pack-destination "$RUNNER_TEMP/publish" > "$RUNNER_TEMP/pack.json"
           node -e 'const fs = require("node:fs"); const [p] = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/pack.json")); fs.appendFileSync(process.env.GITHUB_ENV, "TARBALL=" + process.env.RUNNER_TEMP + "/publish/" + p.filename + "\n")'
-      - name: Publish npm with OIDC (or verify identical existing version)
+      - name: Publish npm with OIDC or verify identical existing bytes
         env:
           NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/npm-public.npmrc
         run: |
           printf 'registry=https://registry.npmjs.org/\n@ivannovr:registry=https://registry.npmjs.org/\n' > "$NPM_CONFIG_USERCONFIG"
           node scripts/publish-registry.mjs https://registry.npmjs.org "$TARBALL"
-      - name: Publish GitHub Packages with scoped, isolated authentication
+      - name: Publish GitHub Packages with isolated authentication
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
           NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/npm-github.npmrc
         run: |
           printf 'registry=https://registry.npmjs.org/\n@ivannovr:registry=https://npm.pkg.github.com/\n//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}\n' > "$NPM_CONFIG_USERCONFIG"
           node scripts/publish-registry.mjs https://npm.pkg.github.com "$TARBALL"
+
+  complete:
+    needs: [target, publish]
+    if: ${{ needs.publish.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Complete preparation and create or redispatch reverse synchronization
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPERATION: retry
+          RELEASE_TAG: ${{ needs.target.outputs.tag }}
+        run: node scripts/release-automation.mjs complete

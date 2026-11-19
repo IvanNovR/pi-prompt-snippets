@@ -8,6 +8,8 @@ Reusable prompt rules for [Pi](https://github.com/earendil-works/pi): select sni
 
 ![Selecting snippets, previewing their text, and applying the active-snippet widget](docs/assets/demo.gif)
 
+Contributions go through `dev`. Releases are prepared there, promoted to `main`, published with approval and synchronized back to `dev`. See [contributing](CONTRIBUTING.md) and the [maintainer release guide](docs/RELEASING.md).
+
 ## Install
 
 Requires **Pi 1.5 or later**.
@@ -19,6 +21,10 @@ pi install npm:@ivannovr/pi-prompt-snippets
 Alternatively, install from GitHub: `pi install git:github.com/IvanNovR/pi-prompt-snippets`.
 
 For a local checkout: `pi install /absolute/path/to/pi-prompt-snippets`. Run `/reload` in an existing Pi session after installation.
+
+## Contributing and releases
+
+Normal PRs target `dev`. Releases are prepared on dev, promoted through a `dev` -> `main` merge PR, then synchronized back after publication. See [Contributing](CONTRIBUTING.md) and the [release guide](docs/RELEASING.md).
 
 ## Usage
 
